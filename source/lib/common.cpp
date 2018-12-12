@@ -23,6 +23,15 @@ typedef double f64;
 
 #define RIFF_CODE(str) ( ((str)[0] << 0) | ((str)[1] << 8) | ((str)[2] << 16) | ((str)[3] << 24) )
 
+#define ZeroStruct(var) _Zero((u8 *) (var), sizeof(*(var)))
+void _Zero(u8 *data, u32 size) {
+   for(u32 i = 0; i < size; i++) {
+      data[i] = 0;
+   }
+}
+
+#define ForEachArray(index, name, count, array, code) do { for(u32 index = 0; index < (count); index++){ auto name = (array) + index; code } } while(false)
+
 void Copy(void *src_in, u32 size, void *dest_in) {
    u8 *src = (u8 *) src_in;
    u8 *dest = (u8 *) dest_in;
@@ -147,35 +156,49 @@ bool IsUInt(string s) {
    return true;
 }
 
-//make this more advanced (eg. block based with a freelist)
-struct MemoryArena {
+struct MemoryArenaBlock {
+   MemoryArenaBlock *next;
    u64 size;
    u64 used;
    u8 *memory;
 };
 
-MemoryArena NewMemoryArena(void *memory, u64 size) {
-   MemoryArena result = {};
-   result.size = size;
-   result.used = 0;
-   result.memory = (u8 *)memory;
-   return result;
-}
+typedef MemoryArenaBlock *(*allocator_callback)(u64 size);
+
+struct MemoryArena {
+   allocator_callback allocator;
+   MemoryArenaBlock *first_block;
+   MemoryArenaBlock *curr_block;
+   u64 initial_size;
+};
 
 u8 *PushSize(MemoryArena *arena, u64 size) {
-   Assert((arena->used + size) <= arena->size);
-   u8 *result = (u8 *)arena->memory + arena->used;
-   arena->used += size;
- 
-   for(u32 i = 0; i < size; i++) {
-      result[i] = 0;
+   MemoryArenaBlock *curr_block = arena->curr_block;
+   if((curr_block->size - curr_block->used) <= size) {
+      if(curr_block->next == NULL) {
+         //TODO: what size should we allocate?
+         MemoryArenaBlock *new_block = arena->allocator(Max(arena->initial_size, size));
+         curr_block->next = new_block;
+         arena->curr_block = new_block;
+      } else {
+         arena->curr_block = curr_block->next; 
+      }
+
+      //TODO: this could technically get stuck in a loop, we need to test this new system
+      //the old one was super simple and this one isnt so much
+      return PushSize(arena, size);
+   } else {
+      u8 *result = curr_block->memory + curr_block->used;
+      curr_block->used += size;
+      _Zero(result, size);
+   
+      return result;
    }
- 
-   return result;
 }
 
 #define PushStruct(arena, struct) (struct *) PushSize(arena, sizeof(struct))
 #define PushArray(arena, struct, length) (struct *) PushSize(arena, (length) * sizeof(struct))
+#define PushArrayCopy(arena, struct, first_elem, length) (struct *) PushCopy(arena, first_elem, length * sizeof(struct))
 
 string PushCopy(MemoryArena *arena, string s) {
    string result = {};
@@ -192,7 +215,13 @@ u8 *PushCopy(MemoryArena *arena, void *src, u32 size) {
 }
 
 void Reset(MemoryArena *arena) {
-   arena->used = 0;
+   for(MemoryArenaBlock *curr_block = arena->first_block;
+       curr_block; curr_block = curr_block->next)
+   {
+      curr_block->used = 0;
+   }
+   
+   arena->curr_block = arena->first_block;
 }
 
 struct buffer {
@@ -228,6 +257,8 @@ string ConsumeString(buffer *b, u32 length) {
    return result;
 }
 
+#define ConsumeAndCopyArray(arena, b, struct, length) PushArrayCopy(arena, struct, ConsumeArray(b, struct, length), length)
+
 #define PeekStruct(b, struct) (struct *) PeekSize(b, sizeof(struct))
 u8 *PeekSize(buffer *b, u64 size) {
    Assert((b->offset + size) <= b->size);
@@ -243,6 +274,12 @@ void WriteSize(buffer *b, void *in_data, u64 size) {
    b->offset += size;
 }
 
+void WriteString(buffer *b, string str) {
+   WriteArray(b, str.text, str.length);
+}
+
+#define WriteStructData(b, type, name, code) do { type name = {}; code WriteStruct(b, &name); } while(false)
+
 MemoryArena __temp_arena;
 
 #define PushTempSize(size) PushSize(&__temp_arena, (size))
@@ -250,6 +287,11 @@ MemoryArena __temp_arena;
 #define PushTempArray(struct, length) (struct *) PushSize(&__temp_arena, (length) * sizeof(struct))
 #define PushTempCopy(string) PushCopy(&__temp_arena, (string))
 #define PushTempBuffer(size) PushBuffer(&__temp_arena, (size))
+
+//TODO: make the temp memory stuff a bit more advanced, eg. scope local temp arenas
+// struct TempArena {
+//    MemoryArenaBlock *
+// };
 
 //--------------REWRITE THIS ASAP-----------------
 //------------------------------------------------
@@ -325,6 +367,44 @@ f32 Random01() {
 }
 //------------------------------------------------
 
+//-----------------HASH-STUFF---------------------
+//------------------------------------------------
+
+//NOTE: tried to do this with templates, was ugly,
+//      tried with macros, also ugly, try again later
+
+/*
+#define HashAndListPointers(type) \
+   type *next_in_list; \
+   type *next_in_hash;
+
+#define GetOrCreate(result_name, thing_pointer, constructor) \
+   {\
+      auto thing = (thing_pointer); \
+      u32 hash = Hash(name) % ArraySize(state->subsystem_hash); \
+      for(auto *curr = thing->hash[hash]; curr; curr = curr->next_in_hash) { \
+         if(curr->name == name) { \
+            result_name = curr; \
+         } \
+      } \
+      \
+      if(result == NULL) { \
+         auto *new_subsystem = PushStruct(arena, RecorderSubsystem); \
+         new_subsystem->name = PushCopy(arena, name); \
+         \
+         new_subsystem->next_in_hash = state->subsystem_hash[hash]; \
+         new_subsystem->next_in_list = state->first_subsystem; \
+         \
+         state->subsystem_hash[hash] = new_subsystem; \
+         state->first_subsystem = new_subsystem; \
+         state->subsystem_count++; \
+         result = new_subsystem; \
+      } \
+   }
+*/
+
+//------------------------------------------------
+
 #define PI32 3.141592653589793238462
 
 f32 lerp(f32 a, f32 t, f32 b) {
@@ -379,6 +459,10 @@ v2 operator+ (v2 a, v2 b) {
 	return output;
 }
 
+v2 operator- (v2 v) {
+	return V2(-v.x, -v.y);
+}
+
 v2 operator- (v2 a, v2 b) {
 	v2 output = {};
 	output.x = a.x - b.x;
@@ -414,15 +498,31 @@ v2 operator/ (v2 a, v2 b) {
 	return output;
 }
 
+v2 Perp(v2 v) {
+   return V2(v.y, -v.x);
+}
+
 #include "math.h"
 
 f32 Length(v2 a) { return sqrtf(a.x * a.x + a.y * a.y); }
 f32 Distance(v2 a, v2 b) { return Length(a - b); }
 
+v2 Normalize(v2 v) {
+   f32 len = Length(v);
+   return (len == 0) ? V2(0, 0) : (v / len);
+}
+
 struct rect2 {
    v2 min;
    v2 max;
 };
+
+rect2 operator+ (v2 offset, rect2 r) {
+	rect2 result = r;
+	result.min = result.min + offset;
+	result.max = result.max + offset;
+	return result;
+}
 
 inline rect2 RectMinSize(v2 min, v2 size) {
    rect2 result = {};
@@ -491,6 +591,8 @@ inline rect2 Overlap(rect2 a, rect2 b) {
    return result;
 }
 
+//TODO union
+
 union mat4 {
    f32 e[16];
 };
@@ -522,19 +624,48 @@ mat4 Orthographic(f32 top, f32 bottom, f32 left, f32 right, f32 nearPlane, f32 f
 
 string exe_directory = {};
 
+u64 total_size_requested = 0;
+u64 total_size_allocated = 0;
+u32 arenas_allocated = 0;
+u32 arena_blocks_allocated = 0;
+
 //------------------PLATFORM-SPECIFIC-STUFF---------------------
 #ifdef COMMON_PLATFORM
    #if defined(_WIN32)
-      //NOTE: on windows you need to include "windows.h" before common
-      u32 AtomicIncrement(volatile u32 *x) {
-         Assert(( (u64)x & 0x3 ) == 0);
-         return InterlockedIncrement(x);
-      }
-      #define READ_BARRIER MemoryBarrier()
-      #define WRITE_BARRIER MemoryBarrier()
+      //TODO: make stuff thread safe before we re-introduce this stuff
 
-      MemoryArena PlatformAllocArena(u64 size) {
-         return NewMemoryArena(VirtualAlloc(0, size, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE), size);
+      //NOTE: on windows you need to include "windows.h" before common
+      // u32 AtomicIncrement(volatile u32 *x) {
+      //    Assert(( (u64)x & 0x3 ) == 0);
+      //    return InterlockedIncrement(x);
+      // }
+      // #define READ_BARRIER MemoryBarrier()
+      // #define WRITE_BARRIER MemoryBarrier()
+
+      //TODO: take a look at the weird memory usage
+      MemoryArenaBlock *PlatformAllocArenaBlock(u64 size) {
+         //OutputDebugStringA("Allocating Arena Block\n");
+         total_size_requested += size;
+         total_size_allocated += (sizeof(MemoryArenaBlock) + size);
+         arena_blocks_allocated++;
+
+         MemoryArenaBlock *result = (MemoryArenaBlock *) VirtualAlloc(0, sizeof(MemoryArenaBlock) + size, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
+         result->size = size;
+         result->used = 0;
+         result->next = 0;
+         result->memory = (u8 *) (result + 1);
+         return result;
+      }
+
+      MemoryArena PlatformAllocArena(u64 initial_size) {
+         arenas_allocated++;
+         
+         MemoryArena result = {};
+         result.allocator = PlatformAllocArenaBlock;
+         result.first_block = PlatformAllocArenaBlock(initial_size);
+         result.curr_block = result.first_block;
+         result.initial_size = initial_size;
+         return result;
       }
 
       buffer ReadEntireFile(const char* path, bool in_exe_directory = false) {
@@ -553,8 +684,7 @@ string exe_directory = {};
             CloseHandle(file_handle);
          } else {
             OutputDebugStringA("File read error\n");
-            DWORD error_code = GetLastError(); 
-            u32 i = 0;
+            DWORD error_code = GetLastError();
          }
 
          return result;
@@ -588,6 +718,7 @@ string exe_directory = {};
       struct FileListLink {
          FileListLink *next;
          string name;
+         string full_name;
       };
 
       FileListLink *ListFilesWithExtension(char *wildcard_extension, MemoryArena *arena = &__temp_arena) {
@@ -597,38 +728,191 @@ string exe_directory = {};
          if(handle != INVALID_HANDLE_VALUE) {
             do {
                FileListLink *new_link = PushStruct(arena, FileListLink);
-               string name = Literal(file.cFileName);
-               for(u32 i = 0; i < name.length; i++) {
-                  if(name.text[i] == '.') {
-                     name.length = i;
+               string full_name = Literal(file.cFileName);
+               
+               if((full_name == Literal(".")) ||
+                  (full_name == Literal("..")))
+               {
+                  continue;
+               }
+               
+               u32 name_length = 0;
+               for(u32 i = 0; i < full_name.length; i++) {
+                  if(full_name.text[i] == '.') {
+                     name_length = i;
                      break;
                   }
                }
-               new_link->name = PushCopy(arena, name);
+               
+               new_link->full_name = PushCopy(arena, full_name);
+               new_link->name = String(new_link->full_name.text, name_length);
                new_link->next = result;
                result = new_link;
             } while(FindNextFileA(handle, &file));
          }
          return result;
       }
+   
+      u64 GetFileTimestamp(const char* path, bool in_exe_directory = false) {
+         char full_path[MAX_PATH + 1];
+         sprintf(full_path, "%.*s%s", exe_directory.length, exe_directory.text, path);
+         
+         FILETIME last_write_time;
+         HANDLE file_handle = CreateFileA(in_exe_directory ? full_path : path, GENERIC_READ, FILE_SHARE_READ,
+                                          NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+         
+         if(file_handle != INVALID_HANDLE_VALUE) {
+            GetFileTime(file_handle, NULL, NULL, &last_write_time);
+            CloseHandle(file_handle);
+         }
+         
+         return (u64)last_write_time.dwLowDateTime | 
+               ((u64)last_write_time.dwHighDateTime << 32);
+      }
+
+      u64 GetFileTimestamp(string path, bool in_exe_directory = false) {
+         return GetFileTimestamp(ToCString(path), in_exe_directory);
+      }
+
+      struct FileWatcherLink {
+         FileWatcherLink *next_in_list;
+         FileWatcherLink *next_in_hash;
+
+         bool found;
+
+         u64 timestamp;
+         string name;
+      };
+      
+      struct FileWatcher {
+         MemoryArena arena; //NOTE: this needs its own memory because it has to persist
+         string wildcard_extension;
+
+         FileWatcherLink *first_in_list;
+         FileWatcherLink *hash[64];
+      };
+
+      void InitFileWatcher(FileWatcher *watcher, MemoryArena arena, string wildcard_extension) {
+         watcher->arena = arena;
+         watcher->wildcard_extension = PushCopy(&watcher->arena, wildcard_extension);
+      }
+      
+      void InitFileWatcher(FileWatcher *watcher, MemoryArena arena, char *wildcard_extension) {
+         InitFileWatcher(watcher, arena, Literal(wildcard_extension));
+      }
+
+      //NOTE: updates file watcher, returns true if file timestamps have changed
+      bool CheckFiles(FileWatcher *watcher) {
+         MemoryArena *arena = &watcher->arena;
+
+         for(FileWatcherLink *curr = watcher->first_in_list;
+             curr; curr = curr->next_in_list)
+         {
+            curr->found = false;
+         }
+
+         bool changed = false;
+         for(FileListLink *file = ListFilesWithExtension(ToCString(watcher->wildcard_extension)); 
+             file; file = file->next)
+         {
+            FileWatcherLink *link = NULL;
+            u32 hash = Hash(file->full_name) % ArraySize(watcher->hash);
+            for(FileWatcherLink *curr = watcher->hash[hash];
+                curr; curr = curr->next_in_hash)
+            {
+               if(curr->name == file->full_name) {
+                  link = curr;
+               }
+            }
+
+            if(link == NULL) {
+               changed = true;
+               FileWatcherLink *new_link = PushStruct(arena, FileWatcherLink);
+               new_link->name = PushCopy(arena, file->full_name);
+               
+               new_link->next_in_list = watcher->first_in_list;
+               watcher->first_in_list = new_link;
+               new_link->next_in_hash = watcher->hash[hash];
+               watcher->hash[hash] = new_link;
+
+               link = new_link;
+            }
+
+            link->found = true;
+            u64 timestamp = GetFileTimestamp(file->name);
+            if(link->timestamp != timestamp) {
+               link->timestamp = timestamp;
+               changed = true;
+            }
+         }
+
+         for(FileWatcherLink *curr = watcher->first_in_list;
+             curr; curr = curr->next_in_list)
+         {
+            if(curr->found == false) {
+               changed = true;
+            }
+         }
+         
+         return changed;
+      }
+      
+      //NOTE: this is pretty jank-tastic but itll get cleaned up in future
+      char exepath[MAX_PATH + 1];
+      void Win32CommonInit(MemoryArena temp_arena) {
+         __temp_arena = temp_arena;
+
+         if(0 == GetModuleFileNameA(0, exepath, MAX_PATH + 1))
+            Assert(false);
+            
+         exe_directory = Literal(exepath);
+         for(u32 i = exe_directory.length - 1; i >= 0; i--) {
+            if((exe_directory.text[i] == '\\') || (exe_directory.text[i] == '/'))
+               break;
+
+            exe_directory.length--;
+         }
+      }
+
+      struct Timer {
+         LARGE_INTEGER frequency;
+         LARGE_INTEGER timer;
+      };
+
+      Timer InitTimer() {
+         Timer result = {};
+         QueryPerformanceFrequency(&result.frequency); 
+         QueryPerformanceCounter(&result.timer);
+         return result;
+      }
+
+      f32 GetDT(Timer *timer) {
+         LARGE_INTEGER new_time;
+         QueryPerformanceCounter(&new_time);
+         f32 dt = (f32)(new_time.QuadPart - timer->timer.QuadPart) / (f32)timer->frequency.QuadPart;
+         timer->timer = new_time;
+         
+         return dt;
+      }
+
    #else
       #error "we dont support that platform yet"
    #endif
 #endif
 //------------------------------------------------------------------
 
-struct ticket_mutex {
-   volatile u32 ticket;
-   volatile u32 serving;
-};
+// struct ticket_mutex {
+//    volatile u32 ticket;
+//    volatile u32 serving;
+// };
 
-void BeginMutex(ticket_mutex *mutex) {
-   u32 ticket = AtomicIncrement(&mutex->ticket) - 1;
-   while(mutex->serving != ticket);
-}
+// void BeginMutex(ticket_mutex *mutex) {
+//    u32 ticket = AtomicIncrement(&mutex->ticket) - 1;
+//    while(mutex->serving != ticket);
+// }
 
-void EndMutex(ticket_mutex *mutex) {
-   AtomicIncrement(&mutex->serving);
-}
+// void EndMutex(ticket_mutex *mutex) {
+//    AtomicIncrement(&mutex->serving);
+// }
 
 //TODO: thread_pool

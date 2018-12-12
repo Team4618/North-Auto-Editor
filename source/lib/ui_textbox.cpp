@@ -14,28 +14,27 @@ struct ui_textbox {
    bool changed;
 };
 
+//TODO: use stb_textedit?
+
 //TODO: padding & margin
 #define TextBox(...) _TextBox(GEN_UI_ID, __VA_ARGS__)
 ui_textbox _TextBox(ui_id id, element *parent, TextBoxData *data, f32 line_height) {
    UIContext *context = parent->context;
-   sdfFont *font = context->font;
-   element *e = _Panel(id, parent, NULL, V2(GetMaxCharWidth(font, line_height) * data->size, 
-                       line_height));
-   ui_click inter = DefaultClickInteraction(e);
+   element *e = _Panel(id, parent, V2(/*GetMaxCharWidth(font, line_height)*/ 50 * data->size, line_height), Captures(INTERACTION_SELECT));
 
    string drawn_text = { data->text, data->used };
    Background(e, V4(0.7, 0.7, 0.7, 1));
-   Text(e, drawn_text, e->bounds.min, line_height);
+   Text(e, drawn_text, e->bounds.min, line_height, BLACK);
 
    data->cursor = Clamp(0, data->used, data->cursor);
 
    if(data->used > 0) {
       v2 cursor_pos;
       if(data->cursor == data->used) {
-         cursor_pos = V2(GetCharBounds(font, drawn_text, data->cursor - 1, e->bounds.min, line_height).max.x,
+         cursor_pos = V2(GetCharBounds(context, drawn_text, data->cursor - 1, e->bounds.min, line_height).max.x,
                          e->bounds.min.y);
       } else {
-         cursor_pos = V2(GetCharBounds(font, drawn_text, data->cursor, e->bounds.min, line_height).min.x,
+         cursor_pos = V2(GetCharBounds(context, drawn_text, data->cursor, e->bounds.min, line_height).min.x,
                          e->bounds.min.y);
       }
 
@@ -72,14 +71,24 @@ ui_textbox _TextBox(ui_id id, element *parent, TextBoxData *data, f32 line_heigh
    ui_textbox result = {};
    result.e = e;
    result.data = data;
-   result.clicked = inter.clicked;
+   result.clicked = WasClicked(e);
    result.enter = IsSelected(e) && input->key_enter;
    result.changed = changed;
    return result;
 }
 
+#define StaticTextBoxData(name, char_count) static TextBoxData name = {}; do{ static char __buffer[char_count] = {}; name.text = __buffer; name.size = ArraySize(__buffer); }while(false) 
+
 string GetText(TextBoxData data) {
    return String(data.text, data.used);
+}
+
+string GetText(ui_textbox textbox) {
+   return GetText(*textbox.data);
+}
+
+void Clear(ui_textbox textbox) {
+   textbox.data->used = 0;
 }
 
 void CopyStringToTextbox(string s, TextBoxData *textbox) {

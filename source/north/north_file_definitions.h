@@ -58,26 +58,28 @@ struct Field_FileHeader {
 //-----------------------------------------------------------
 
 //-----------------------------------------------------------
-namespace RobotProfile_CommandType {
-   enum type {
-      NonBlocking = 0,
-      Blocking = 1,
-      Continuous = 2,
-   };
+struct RobotProfile_Parameter {
+   u8 is_array;
+   u8 name_length; 
+   u8 value_count; //Ignored if is_array is false
+   //char name[name_length]
+   //f32 [value_count]
 };
 
 struct RobotProfile_SubsystemCommand {
    u8 name_length;
    u8 param_count;
-   u8 type;
+   u8 type; //NOTE: North_CommandType
    //char name[name_length]
    //{ u8 length; char [length]; } [param_count]
 };
 
 struct RobotProfile_SubsystemDescription {
    u8 name_length;
+   u8 parameter_count;
    u8 command_count;
    //char name[name_length]
+   //RobotProfile_Parameter [parameter_count]
    //RobotProfile_SubsystemCommand [command_count]
 };
 
@@ -93,66 +95,74 @@ namespace RobotProfile_Flags {
 struct RobotProfile_FileHeader {
 #define ROBOT_PROFILE_MAGIC_NUMBER RIFF_CODE("NCRP") 
 #define ROBOT_PROFILE_CURR_VERSION 0
-   u8 robot_name_length;
    u8 subsystem_count;
    f32 robot_width;
-   f32 robot_height;
+   f32 robot_length;
    u32 flags;
-   //char robot_name[robot_name_length]
    //RobotProfile_SubsystemDescription [subsystem_count]
 };
 //-----------------------------------------------------------
 
 //-----------------------------------------------------------
-struct AutonomousRun_SubsystemDiagnostics {
+struct RobotRecording_SubsystemDiagnostics {
    u8 name_length;
    u8 diagnostic_count;
    //char name[name_length]
-   //AutonomousRun_Diagnostic [diagnostic_count]
+   //RobotRecording_Diagnostic [diagnostic_count]
 };
 
-struct AutonomousRun_Diagnostic {
-   enum unit_type {
-      Unitless = 0,
-      Feet = 1,
-      FeetPerSecond = 2,
-      Degrees = 3,
-      DegreesPerSecond = 4,
-      Seconds = 5,
-      Percent = 6,
-      Amp = 7,
-      Volt = 8,
-   };
-
+struct RobotRecording_Diagnostic {
    u8 name_length;
-   u8 unit;
+   u8 unit; //NOTE: North_Unit
    u32 sample_count;
    //char name[name_length]
-   //AutonomousRun_DiagnosticSample [sample_count]
+   //RobotRecording_DiagnosticSample [sample_count]
 };
 
-struct AutonomousRun_DiagnosticSample {
+struct RobotRecording_DiagnosticSample {
    f32 value;
    f32 time;
 };
 
-struct AutonomousRun_RobotStateSample {
+struct RobotRecording_RobotStateSample {
    v2 pos;
-   v2 vel;
    f32 angle;
    f32 time;
 };
 
-struct AutonomousRun_FileHeader {
-#define AUTONOMOUS_RUN_MAGIC_NUMBER RIFF_CODE("NCAR") 
-#define AUTONOMOUS_RUN_CURR_VERSION 0
+struct RobotRecording_Message {
+   u8 type; //NOTE North_MessageType
+   u16 length;
+   f32 begin_time;
+   f32 end_time;
+   //char message[length]
+};
+
+struct RobotRecording_Marker {
+   v2 pos;
+   u16 length;
+   f32 begin_time;
+   f32 end_time;
+   //char message[length]
+};
+
+struct RobotRecording_FileHeader {
+#define ROBOT_RECORDING_MAGIC_NUMBER RIFF_CODE("NCRR") 
+#define ROBOT_RECORDING_CURR_VERSION 0
    u64 timestamp;
    u8 robot_name_length;
+   f32 robot_width;
+   f32 robot_length;
    u8 subsystem_count;
    u32 robot_state_sample_count;
+   u32 message_count;
+   u32 marker_count; 
+
    //char [robot_name_length]
-   //AutonomousRun_RobotStateSample [robot_state_sample_count]
-   //AutonomousRun_SubsystemDiagnostics [subsystem_count]
+   //RobotRecording_RobotStateSample [robot_state_sample_count]
+   //RobotRecording_SubsystemDiagnostics [subsystem_count]
+   //RobotRecording_Message [message_count]
+   //RoboRecording_Marker [marker_count]
 };
 //-----------------------------------------------------------
 
@@ -181,29 +191,29 @@ struct AutonomousProgram_DiscreteEvent {
    //f32 [parameter_count]
 };
 
-struct AutonomousProgram_Value {
-   u8 is_variable;
-   //f32 if !is_variable
-   //struct { u8 length; char [length] } if is_variable
+struct AutonomousProgram_ControlPoint {
+   v2 pos;
+   v2 tangent;
 };
 
-//TODO: linked auto projects
 struct AutonomousProgram_Path {
+   //NOTE: begin & end points are (parent.pos, in_tangent) & (end_node.pos, out_tangent)
+   v2 in_tangent;
+   v2 out_tangent;
+
    u8 is_reverse;
 
-   //NOTE: begin & end points are parent.pos & end_node.pos
    u8 conditional_length; //NOTE: if conditional_length is 0, there is no conditional
    u8 control_point_count;
 
+   u8 velocity_datapoint_count;
    u8 continuous_event_count;
    u8 discrete_event_count;
 
-   //AutonomousProgram_Value accel
-   //AutonomousProgram_Value deccel
-   //AutonomousProgram_Value max_vel
-
    //char conditional_name [conditional_length]
-   //v2 [control_point_count]
+   //AutonomousProgram_ControlPoint [control_point_count]
+
+   //AutonomousProgram_DataPoint [velocity_datapoint_count]
    //AutonomousProgram_ContinuousEvent [continuous_event_count]
    //AutonomousProgram_DiscreteEvent [discrete_event_count]
 
@@ -227,17 +237,11 @@ struct AutonomousProgram_Node {
    //AutonomousProgram_Path [path_count]
 };
 
-struct AutonomousProgram_Variable {
-   u8 name_length;
-   f32 value;
-   //char [name_length]
-};
-
 struct AutonomousProgram_FileHeader {
 #define AUTONOMOUS_PROGRAM_MAGIC_NUMBER RIFF_CODE("NCAP") 
 #define AUTONOMOUS_PROGRAM_CURR_VERSION 0
-   u8 variable_count;
-   //AutonomousProgram_Variable [variable_count]
+   //TODO: linked auto projects
+
    //AutonomousProgram_Node begining_node
 };
 //-----------------------------------------------------------

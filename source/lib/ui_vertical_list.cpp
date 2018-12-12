@@ -25,14 +25,14 @@ rect2 verticalListLayout(element *e, u8 *in_layout_data, v2 element_size, v2 pad
 #define VerticalList(...) _VerticalList(GEN_UI_ID, __VA_ARGS__)
 element *_VerticalList(ui_id id, element *parent, rect2 bounds) {
    UIContext *context = parent->context;
-   element *base = _Panel(id + GEN_UI_ID, parent, StackLayout, bounds);
+   element *base = _Panel(id + GEN_UI_ID, parent, bounds, Layout(StackLayout));
    
    vertical_list_persistent_data *data = GetOrAllocate(base, vertical_list_persistent_data);
    data->last_length = data->length;
    data->length = 0;
 
-   element *content = _Panel(id + GEN_UI_ID, base, NULL, bounds);
-   element *scroll  = _Panel(id + GEN_UI_ID, base, NULL, bounds);
+   element *content = _Panel(id + GEN_UI_ID, base, bounds, Captures(INTERACTION_VERTICAL_SCROLL));
+   element *scroll  = _Panel(id + GEN_UI_ID, base, bounds);
 
    vertical_list_layout_data *layout_data = PushStruct(&context->frame_arena, vertical_list_layout_data); 
    layout_data->data = data;
@@ -43,9 +43,7 @@ element *_VerticalList(ui_id id, element *parent, rect2 bounds) {
    
    rect2 scroll_column_rect = RectMinMax(V2(scroll->bounds.max.x - 20, scroll->bounds.min.y), 
                                          scroll->bounds.max);
-   element *scroll_column = _Panel(id + GEN_UI_ID, scroll, NULL, scroll_column_rect);
-   ui_click scroll_click = DefaultClickInteraction(scroll_column);
-
+   element *scroll_column = _Panel(id + GEN_UI_ID, scroll, scroll_column_rect);
    Outline(scroll_column, BLACK);
 
    f32 max_offset = data->last_length - Size(bounds).y;
@@ -55,11 +53,10 @@ element *_VerticalList(ui_id id, element *parent, rect2 bounds) {
    rect2 scroll_handle_rect = RectMinSize(scroll_column_rect.min + V2(5, 5 + scroll_handle_offset),
                                           V2(10, scroll_handle_height - 10));
    
-   element *scroll_handle = _Panel(id + GEN_UI_ID, scroll_column, NULL, scroll_handle_rect);
-   ui_drag scroll_drag = DefaultDragInteraction(scroll_handle);
-   Background(scroll_handle, IsHot(scroll_handle) ? RED : BLACK);
+   element *scroll_handle = _Panel(id + GEN_UI_ID, scroll_column, scroll_handle_rect, Captures(INTERACTION_DRAG));
+   Background(scroll_handle, IsActive(scroll_handle) ? RED : BLACK);
 
-   data->scroll_offset += scroll_drag.drag.y; //TODO: the scroll speed isnt 1:1, the bigger last_length the faster we should scroll
+   data->scroll_offset += GetDrag(scroll_handle).y - GetVerticalScroll(content); //TODO: the scroll speed isnt 1:1, the bigger last_length the faster we should scroll
    data->scroll_offset = Clamp(0, Max(0, max_offset), data->scroll_offset);
 
    return content;

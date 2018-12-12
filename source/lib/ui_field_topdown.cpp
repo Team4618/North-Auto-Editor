@@ -10,7 +10,7 @@ ui_field_topdown _FieldTopdown(ui_id id, element *parent, texture background_ima
    width = Clamp(0, 700, width);
    v2 size = V2(width, size_in_ft.y  * (width / size_in_ft.x));
    f32 x_padding = (Size(parent->bounds).x - size.x) / 2;
-   element *e = _Panel(id, parent, NULL, size, V2(x_padding, 0));
+   element *e = _Panel(id, parent, size, Padding(x_padding, 0));
    Texture(e, background_image, e->bounds);
 
    ui_field_topdown result = {};
@@ -44,43 +44,22 @@ v2 GetPoint(ui_field_topdown *field, v2 p_in_ft) {
    return Center(field->bounds) + FeetToPixels(field, p_in_ft);
 }
 
-v2 GetPointOnBezier(v2 a, v2 b, v2 c, f32 t) {
-   return (1-t)*(1-t)*a + 2*(1-t)*t*b + t*t*c;
+v2 CubicHermiteSpline(v2 a_pos, v2 a_tan, v2 b_pos, v2 b_tan, f32 t) {
+   return (2*t*t*t - 3*t*t + 1)*a_pos + (t*t*t - 2*t*t + t)*a_tan + 
+          (-2*t*t*t + 3*t*t)*b_pos + (t*t*t - t*t)*b_tan;
 }
 
-void DrawQuadraticBezier(ui_field_topdown *field, v2 a, v2 b, v2 c) {
-   u32 segments = 20;
-   f32 step = (f32)1 / (f32)segments;
-   for(f32 s = 0; s < segments; s++) {
-      v2 p1 = GetPointOnBezier(a, b, c, s * step);
-      v2 p2 = GetPointOnBezier(a, b, c, (s + 1) * step);
-      Line(field->e, GetPoint(field, p1), GetPoint(field, p2), GREEN);
-   }
-}
+void CubicHermiteSpline(ui_field_topdown *field, 
+                        v2 a_pos, v2 a_tan, v2 b_pos, v2 b_tan, 
+                        v4 colour, f32 thickness = 2)
+{
+   u32 point_count = 20;
+   f32 step = (f32)1 / (f32)(point_count - 1);
+   v2 *points = PushTempArray(v2, point_count);
 
-void DrawBezierCurve(ui_field_topdown *field, v2 *in_points, u32 point_count) {
-   Assert(point_count >= 3);
-
-   v2 *points = PushTempArray(v2, 2 * point_count);
-   Copy(in_points, point_count * sizeof(v2), points);
-
-   u32 i;
-   for (i = 0; i < point_count - 3; i += 2) {
-         v2 p0 = points[i];
-         v2 p1 = points[i + 1];
-         v2 p2 = points[i + 2];
-
-         v2 mid = V2((p1.x + p2.x) / 2, (p1.y + p2.y) / 2);
-         
-         //points.add(i + 2, mid);
-         point_count++;
-         for(u32 j = point_count - 1; j > (i + 2); j--) {
-            points[j] = points[j - 1];
-         }
-         points[i + 2] = mid; 
-         
-         DrawQuadraticBezier(field, p0, p1, mid);
+   for(u32 i = 0; i < point_count; i++) {
+      points[i] = GetPoint(field, CubicHermiteSpline(a_pos, a_tan, b_pos, b_tan, i * step));
    }
 
-   DrawQuadraticBezier(field, points[i], points[i + 1], points[i + 2]);
+   _Line(field->e, colour, thickness, points, point_count);
 }
