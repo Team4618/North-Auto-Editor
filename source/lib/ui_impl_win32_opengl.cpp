@@ -125,7 +125,7 @@ glyph_texture *getOrLoadGlyph(loaded_font *font, u32 codepoint) {
       //NOTE: stb_truetype has SDF generation so we _could_ use that 
       s32 w, h;
       u8 *mono = stbtt_GetCodepointBitmap(&font->fontinfo, 0, scale, codepoint, &w, &h, 0, 0);
-      u32 *rgba = PushTempArray(u32, w * h); //TODO: move to scoped temp memory when thats a thing
+      u32 *rgba = PushTempArray(u32, w * h);
       
       u8 *mono_curr = mono;
       u32 *rgba_curr = rgba;
@@ -542,10 +542,12 @@ void DrawRenderCommandBuffer(RenderCommand *first_command, rect2 bounds, mat4 tr
             glDisableVertexArrayAttrib(gl->vao, colour_slot);
             glEnableVertexArrayAttrib(gl->vao, normal_slot);
             
-            u32 vert_count = (command->drawLine.point_count - 1) * 6;
+            u32 vert_count = (command->drawLine.point_count - (command->drawLine.closed ? 0 : 1)) * 6;
             v2 *verts = PushTempArray(v2, vert_count);
             v2 *normals = PushTempArray(v2, vert_count);
 
+            //TODO: fix line joints & clean this up
+               
             v2 last_point = command->drawLine.points[0];
             for(u32 i = 1; i < command->drawLine.point_count; i++) {
                v2 point = command->drawLine.points[i];
@@ -553,7 +555,6 @@ void DrawRenderCommandBuffer(RenderCommand *first_command, rect2 bounds, mat4 tr
                v2 normal_a = line_normal;
                v2 normal_b = line_normal;
 
-               //TODO: fix line joints
                // if(i > 1) {
                //    v2 prev_line_normal = Normalize(Perp(command->drawLine.points[i - 1] - point));
                //    normal_a = normal_a + prev_line_normal;
@@ -567,6 +568,33 @@ void DrawRenderCommandBuffer(RenderCommand *first_command, rect2 bounds, mat4 tr
                v2 *vert = verts + 6 * (i - 1);
                v2 *normal = normals + 6 * (i - 1);
                
+               vert[0] = last_point;
+               vert[1] = last_point;
+               vert[2] = point;
+               vert[3] = last_point;
+               vert[4] = point;
+               vert[5] = point;
+
+               normal[0] = normal_a;
+               normal[1] = -normal_a;
+               normal[2] = normal_b;
+               normal[3] = -normal_a;
+               normal[4] = normal_b;
+               normal[5] = -normal_b;
+
+               last_point = point;
+            }
+
+            if(command->drawLine.closed) {
+               v2 point = command->drawLine.points[0];
+               v2 line_normal = Normalize(Perp(point - last_point));
+               v2 normal_a = line_normal;
+               v2 normal_b = line_normal;
+
+               v2 *vert = verts + 6 * (command->drawLine.point_count - 1);
+               v2 *normal = normals + 6 * (command->drawLine.point_count - 1);
+               
+               //TODO: make a "write line" function or something
                vert[0] = last_point;
                vert[1] = last_point;
                vert[2] = point;
@@ -798,6 +826,8 @@ void endFrame(ui_impl_win32_window *window, element *root) {
       rect2 background_bounds = RectMinSize(V2(0, 0), V2(400, 400));
       Rectangle(debug_root, background_bounds, V4(0, 0, 0, 0.75));
       
+      //TODO: memory debugging stuff
+
       if(context->debug_hot_e != NULL) {
          string hot_e_loc = Literal(context->debug_hot_e->id.loc);
          Label(debug_root, Concat(Literal("Mousing Over "), hot_e_loc), 30, WHITE);

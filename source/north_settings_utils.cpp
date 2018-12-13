@@ -135,13 +135,49 @@ void WriteNewFieldFile(string name, f32 width, f32 height, string img_file_name)
 }
 
 #ifdef INCLUDE_DRAWSETTINGS
+
+#define SettingsRow(...) _SettingsRow(GEN_UI_ID, __VA_ARGS__)
+ui_numberbox _SettingsRow(ui_id id, element *page, char *label, u32 *num, char *suffix = "") {
+   element *row = Panel(page, V2(Size(page).x, 20), Layout(RowLayout).Margin(0, 5));
+   Label(row, label, 20, BLACK);
+   ui_numberbox result = _TextBox(id, row, num, 20);
+   Label(row, suffix, 20, BLACK);
+   return result;
+}
+
+ui_numberbox _SettingsRow(ui_id id, element *page, char *label, f32 *num, char *suffix = "") {
+   element *row = Panel(page, V2(Size(page).x, 20), Layout(RowLayout).Margin(0, 5));
+   Label(row, label, 20, BLACK);
+   ui_numberbox result = _TextBox(id, row, num, 20);
+   Label(row, suffix, 20, BLACK);
+   return result;
+}
+
+ui_textbox _SettingsRow(ui_id id, element *page, char *label, TextBoxData *text, char *suffix = "") {
+   element *row = Panel(page, V2(Size(page).x, 20), Layout(RowLayout).Margin(0, 5));
+   Label(row, label, 20, BLACK);
+   ui_textbox result = _TextBox(id, row, text, 20);
+   if(IsSelected(result.e))
+      Outline(result.e, GREEN);
+   Label(row, suffix, 20, BLACK);
+   return result;
+}
+
+ui_checkbox _SettingsRow(ui_id id, element *page, char *label, u32 *value, u32 flag, 
+                         v2 size, v2 padding = V2(0, 0), v2 margin = V2(0, 0))
+{
+   element *row = Panel(page, V2(Size(page).x, 20), Layout(RowLayout).Margin(0, 5));
+   Label(row, label, 20, BLACK);
+   ui_checkbox result = _CheckBox(id, row, value, flag, size, padding, margin);
+   return result;
+}
+
 enum SettingsPage {
    SettingsPage_Main,
    SettingsPage_Load,
    SettingsPage_New
 };
 
-//TODO: do we want to save settings & field data every time a change is made or have a "save" button?
 void DrawSettings(element *full_page, NorthSettings *state, 
                   v2 robot_size_ft, string robot_size_label,
                   FileListLink *ncff_files)
@@ -244,7 +280,7 @@ void DrawSettings(element *full_page, NorthSettings *state,
          Label(page, Concat(state->field_name, Literal(".ncff not found")), 20, BLACK);
       }
    } else if(curr_page == SettingsPage_Load) {
-      if(Button(page, "X", menu_button).clicked) {
+      if(Button(top_panel, "Exit", menu_button.Padding(20, 0)).clicked) {
          curr_page = SettingsPage_Main;
       }
       
@@ -254,18 +290,17 @@ void DrawSettings(element *full_page, NorthSettings *state,
          Background(field_panel, light_grey);
 
          if(Button(field_panel, file->name, menu_button).clicked) {
-            //TODO: this is safe because the ReadSettingsFile allocates field_name in settings_arena
-            //       its pretty ugly tho so clean up
-            state->field_name = file->name;
+            state->field_name = PushCopy(&state->arena, file->name);
             UpdateSettingsFile(state);
-            ReadSettingsFile(state);
          }
       }
    } else if(curr_page == SettingsPage_New) {      
       static f32 new_field_width = 0;
       static f32 new_field_height = 0;
       StaticTextBoxData(new_field_name, 15);
-      static texture new_field_image = {};
+      static texture image_preview = {};
+      static string image_path = {};
+      static v2 image_size = V2(0, 0); 
       
       Label(page, "Create New Field File", 20, off_white);
       ui_textbox name_box = SettingsRow(page, "Name: ", &new_field_name);
@@ -273,21 +308,17 @@ void DrawSettings(element *full_page, NorthSettings *state,
       ui_numberbox height_box = SettingsRow(page, "Height: ", &new_field_height, "ft");
       
       bool valid = (GetText(name_box).length > 0) &&
-                   /*(GetText(image_file_box).length > 0) &&*/
                    width_box.valid && (new_field_width > 0) &&
-                   height_box.valid && (new_field_height > 0);
+                   height_box.valid && (new_field_height > 0) &&
+                   (image_path.length > 0) && (image_preview.handle != 0);
       
       if(Button(page, "Create", menu_button.IsEnabled(valid)).clicked) {
-         /*
-         WriteNewFieldFile(GetText(name_box), 
-                           new_field_width,
-                           new_field_height,
-                           GetText(image_file_box));
-         */
+         WriteNewFieldFile(GetText(name_box), new_field_width,
+                           new_field_height, image_path);
          curr_page = SettingsPage_Main;
       }
 
-      if(Button(page, "Exit", menu_button).clicked) {
+      if(Button(top_panel, "Exit", menu_button.Padding(20, 0)).clicked) {
          new_field_width = 0;
          new_field_height = 0;
          Clear(name_box);
@@ -300,18 +331,18 @@ void DrawSettings(element *full_page, NorthSettings *state,
       ui_dropped_files dropped_files = GetDroppedFiles(image_drop);
       
       if(dropped_files.count > 0) {
-         string image_path = dropped_files.names[0];
-         deleteTexture(new_field_image);
+         image_path = PushCopy(&state->arena, dropped_files.names[0]);
+         deleteTexture(image_preview);
          image new_field_img = ReadImage(image_path);
-         new_field_image = createTexture(new_field_img.texels, new_field_img.width, new_field_img.height);
+         image_preview = createTexture(new_field_img.texels, new_field_img.width, new_field_img.height);
+         image_size = V2(new_field_img.width, new_field_img.height);
          FreeImage(&new_field_img);
       }
 
-      if(new_field_image.handle == 0) { 
+      if(image_preview.handle == 0) { 
          Label(image_drop, "Drop Field Image File Here", Size(image_drop), 40, off_white);
       } else {
-         //TODO: maintain the aspect ratio of the texture
-         Texture(image_drop, new_field_image, image_drop->bounds);
+         Texture(image_drop, image_preview, RectCenterSize(Center(image_drop), AspectRatio(image_size, Size(image_drop))));
       }
    }
 }

@@ -167,12 +167,18 @@ typedef MemoryArenaBlock *(*allocator_callback)(u64 size);
 
 struct MemoryArena {
    allocator_callback allocator;
+   u64 initial_size;
+
+   bool valid;
+   MemoryArena *parent;
+   
    MemoryArenaBlock *first_block;
    MemoryArenaBlock *curr_block;
-   u64 initial_size;
 };
 
 u8 *PushSize(MemoryArena *arena, u64 size) {
+   Assert(arena->valid);
+
    MemoryArenaBlock *curr_block = arena->curr_block;
    if((curr_block->size - curr_block->used) <= size) {
       if(curr_block->next == NULL) {
@@ -287,11 +293,6 @@ MemoryArena __temp_arena;
 #define PushTempArray(struct, length) (struct *) PushSize(&__temp_arena, (length) * sizeof(struct))
 #define PushTempCopy(string) PushCopy(&__temp_arena, (string))
 #define PushTempBuffer(size) PushBuffer(&__temp_arena, (size))
-
-//TODO: make the temp memory stuff a bit more advanced, eg. scope local temp arenas
-// struct TempArena {
-//    MemoryArenaBlock *
-// };
 
 //--------------REWRITE THIS ASAP-----------------
 //------------------------------------------------
@@ -411,6 +412,10 @@ f32 lerp(f32 a, f32 t, f32 b) {
    return a + t * (b - a);
 }
 
+f32 abs(f32 x) {
+   return (x > 0) ? x : -x;
+}
+
 union v4 {
    struct { f32 r, g, b, a; };
    struct { f32 x, y, z, w; };
@@ -512,6 +517,26 @@ v2 Normalize(v2 v) {
    return (len == 0) ? V2(0, 0) : (v / len);
 }
 
+v2 AspectRatio(v2 initial_size, v2 size_to_fit) {
+   f32 rs = size_to_fit.x / size_to_fit.y;
+   f32 ri = initial_size.x / initial_size.y; 
+   return rs > ri ? V2(initial_size.x * size_to_fit.y / initial_size.y, size_to_fit.y) : 
+                    V2(size_to_fit.x, initial_size.y * size_to_fit.x / initial_size.x);
+}
+
+f32 Dot(v2 a, v2 b) {
+   return a.x * b.x + a.y * b.y;
+}
+
+v2 Midpoint(v2 a, v2 b) {
+   return (a + b) / 2;
+}
+
+f32 DistFromLine(v2 a, v2 b, v2 p) {
+   f32 num = (a.y - b.y) * p.x - (a.x - b.x) * p.y + a.x*b.y - a.y*b.x;
+   return abs(num) / sqrtf((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+}
+
 struct rect2 {
    v2 min;
    v2 max;
@@ -591,8 +616,6 @@ inline rect2 Overlap(rect2 a, rect2 b) {
    return result;
 }
 
-//TODO union
-
 union mat4 {
    f32 e[16];
 };
@@ -665,6 +688,7 @@ u32 arena_blocks_allocated = 0;
          result.first_block = PlatformAllocArenaBlock(initial_size);
          result.curr_block = result.first_block;
          result.initial_size = initial_size;
+         result.valid = true;
          return result;
       }
 

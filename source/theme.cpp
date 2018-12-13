@@ -9,7 +9,7 @@ button_style menu_button = ButtonStyle(
    dark_grey, light_grey, BLACK,
    light_grey, V4(120/255.0, 120/255.0, 120/255.0, 1), WHITE, 
    off_white, light_grey,
-   40, V2(0, 0), V2(0, 0));
+   page_tab_height, V2(0, 0), V2(0, 0));
 texture logoTexture;
 loaded_font theme_font;
 

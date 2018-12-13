@@ -241,7 +241,7 @@ struct AutonomousProgram_FileHeader {
 #define AUTONOMOUS_PROGRAM_MAGIC_NUMBER RIFF_CODE("NCAP") 
 #define AUTONOMOUS_PROGRAM_CURR_VERSION 0
    //TODO: linked auto projects
-
+   f32 starting_angle;
    //AutonomousProgram_Node begining_node
 };
 //-----------------------------------------------------------

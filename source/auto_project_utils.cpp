@@ -58,6 +58,7 @@ struct AutoPath {
 
 struct AutoProjectLink {
    AutoNode *starting_node;
+   f32 starting_angle;
    string name;
 
    AutoProjectLink *next;
@@ -168,6 +169,7 @@ AutoProjectLink *ReadAutoProject(string file_name, MemoryArena *arena) {
 
       AutoProjectLink *result = PushStruct(arena, AutoProjectLink);
       result->name = PushCopy(arena, file_name);
+      result->starting_angle = header->starting_angle;
       result->starting_node = ParseAutoNode(&file, arena);
       return result;
    }
@@ -198,4 +200,8 @@ void ReadProjectsStartingAt(AutoProjectList *list, u32 field_flags, v2 pos) {
 }
 
 //TODO: AutoProjectLink to file
+void WriteProject(AutoProjectLink *project) {
+   
+}
+
 //TODO: AutoProjectLink to packet

@@ -29,6 +29,12 @@ enum EditorSelectedType {
    PathSelected
 };
 
+enum PathEditMode {
+   EditControlPoints,
+   AddControlPoint,
+   RemoveControlPoint
+};
+
 struct EditorState {
    EditorPage page;
    EditorView view;
@@ -39,6 +45,8 @@ struct EditorState {
       AutoNode *selected_node;
       AutoPath *selected_path;
    };
+   bool path_got_selected;
+   PathEditMode path_edit;
 
    MemoryArena project_arena;
    AutoProjectLink *project;
@@ -137,7 +145,8 @@ void DrawNewFileView(element *page, EditorState *state) {
          Reset(&state->project_arena);
          state->project = PushStruct(&state->project_arena, AutoProjectLink);
          state->project->name = Literal("auto_project");
-         
+         state->project->starting_angle = starting_pos->angle;
+
          state->project->starting_node = PushStruct(&state->project_arena, AutoNode);
          state->project->starting_node->pos = starting_pos->pos;
          
@@ -155,10 +164,10 @@ void DrawNodeGraphic(element *e, EditorState *state, AutoNode *node) {
 }
 
 void DrawPath(ui_field_topdown *field, EditorState *state, AutoPath *path);
-void DrawNode(ui_field_topdown *field, EditorState *state, AutoNode *node) {
+void DrawNode(ui_field_topdown *field, EditorState *state, AutoNode *node, bool can_drag = true) {
    UI_SCOPE(field->e->context, node);
    element *e = Panel(field->e, RectCenterSize(GetPoint(field, node->pos), V2(10, 10)),
-                      Captures(INTERACTION_CLICK | INTERACTION_DRAG));
+                      Captures(INTERACTION_DRAG | INTERACTION_SELECT));
    DrawNodeGraphic(e, state, node);
    
    if(WasClicked(e)) {
@@ -166,12 +175,44 @@ void DrawNode(ui_field_topdown *field, EditorState *state, AutoNode *node) {
       state->selected_node = node;
    }
    
-   node->pos = ClampTo(node->pos + PixelsToFeet(field, GetDrag(e)),
-                       RectCenterSize(V2(0, 0), field->size_in_ft));
-            
+   if(can_drag) {
+      node->pos = ClampTo(node->pos + PixelsToFeet(field, GetDrag(e)),
+                        RectCenterSize(V2(0, 0), field->size_in_ft));
+   }
+
    for(u32 i = 0; i < node->path_count; i++) {
       DrawPath(field, state, node->out_paths[i]);
    }
+}
+
+v2 CubicHermiteSpline(AutonomousProgram_ControlPoint a, AutonomousProgram_ControlPoint b, f32 t) {
+   return CubicHermiteSpline(a.pos, a.tangent, b.pos, b.tangent, t);
+}
+
+v2 CubicHermiteSplineTangent(AutonomousProgram_ControlPoint a, AutonomousProgram_ControlPoint b, f32 t) {
+   return CubicHermiteSplineTangent(a.pos, a.tangent, b.pos, b.tangent, t);
+}
+
+//TODO: debug this, its pretty janky with curved lines right now
+f32 MinDistFrom(ui_field_topdown *field, AutonomousProgram_ControlPoint *control_points, u32 control_point_count) {
+   v2 p = Cursor(field->e);
+   f32 result = F32_MAX;
+
+   for(u32 i = 1; i < control_point_count; i++) {
+      AutonomousProgram_ControlPoint cpa = control_points[i - 1];
+      AutonomousProgram_ControlPoint cpb = control_points[i];
+      
+      u32 point_count = 20;
+      f32 step = (f32)1 / (f32)(point_count - 1);
+      
+      for(u32 i = 1; i < point_count; i++) {
+         v2 a = GetPoint(field, CubicHermiteSpline(cpa, cpb, (i - 1) * step));
+         v2 b = GetPoint(field, CubicHermiteSpline(cpa, cpb, i * step));
+         result = Min(DistFromLine(a, b, p), result);
+      }
+   }
+
+   return result;
 }
 
 void DrawPath(ui_field_topdown *field, EditorState *state, AutoPath *path) {
@@ -183,73 +224,230 @@ void DrawPath(ui_field_topdown *field, EditorState *state, AutoPath *path) {
    control_points[control_point_count - 1] = { path->out_node->pos, path->out_tangent };
    Copy(path->control_points, path->control_point_count * sizeof(AutonomousProgram_ControlPoint), control_points + 1);
 
+   bool hot = IsHot(field->e) && (MinDistFrom(field, control_points, control_point_count) < 2);
+
    for(u32 i = 1; i < control_point_count; i++) {
       AutonomousProgram_ControlPoint a = control_points[i - 1];
       AutonomousProgram_ControlPoint b = control_points[i];
-      CubicHermiteSpline(field, a.pos, a.tangent, b.pos, b.tangent, GREEN);
+      CubicHermiteSpline(field, a.pos, a.tangent, b.pos, b.tangent, hot ? RED : GREEN);
    }
 
-   if(path->in_node == state->project->starting_node) {
+   if((state->selected_type == PathSelected) && (state->selected_path == path)) {
+      bool point_clicked = false;
+      u32 point_index = 0;
+      
+      for(u32 i = 0; i < path->control_point_count; i++) {
+         AutonomousProgram_ControlPoint *point = path->control_points + i;
+         UI_SCOPE(field->e->context, point);
+         element *handle = Panel(field->e, RectCenterSize(GetPoint(field, point->pos), V2(10, 10)), Captures(INTERACTION_DRAG | INTERACTION_CLICK));
+         
+         Background(handle, RED);
+         if(IsHot(handle)) {
+            Outline(handle, BLACK);
+         }
 
+         if((state->path_edit == RemoveControlPoint) && WasClicked(handle)) {
+            point_clicked = true;
+            point_index = i;
+         }
+
+         point->pos = ClampTo(point->pos + PixelsToFeet(field, GetDrag(handle)),
+                              RectCenterSize(V2(0, 0), field->size_in_ft));      
+      }
+
+      if(point_clicked) {
+         AutonomousProgram_ControlPoint *new_control_points =
+            PushArray(&state->project_arena, AutonomousProgram_ControlPoint, path->control_point_count - 1);
+
+         u32 before_count = point_index;
+         Copy(path->control_points, before_count * sizeof(AutonomousProgram_ControlPoint), new_control_points);
+         Copy(path->control_points + (point_index + 1), 
+               (path->control_point_count - point_index - 1) * sizeof(AutonomousProgram_ControlPoint), new_control_points + before_count);
+               
+         path->control_points = new_control_points;
+         path->control_point_count--;
+      }
+   }
+
+   if(field->clicked && hot) {
+      state->selected_type = PathSelected;
+      state->selected_path = path;
+      state->path_got_selected = true;
    }
 
    DrawNode(field, state, path->out_node);
+}
+
+void DrawTangentHandle(ui_field_topdown *field, v2 pos, v2 *tangent) {
+   v2 handle_pos = GetPoint(field, pos + *tangent);
+   element *handle = Panel(field->e, RectCenterSize(handle_pos, V2(10, 10)), Captures(INTERACTION_DRAG));
+   Line(field->e, BLUE, 2, GetPoint(field, pos), handle_pos);
+   Background(handle, BLUE);
+
+   *tangent = ClampTo(*tangent + PixelsToFeet(field, GetDrag(handle)),
+                      (-pos) + RectCenterSize(V2(0, 0), field->size_in_ft));
 }
 
 void DrawEditingView(element *page, EditorState *state) {
    Assert(state->project != NULL);
 
    Panel(state->top_bar, V2(40, Size(state->top_bar).y));
+   //TODO: make this a textbox
    Label(state->top_bar, state->project->name, Size(state->top_bar).y, WHITE);
    Panel(state->top_bar, V2(40, Size(state->top_bar).y));
    if(Button(state->top_bar, "Save", menu_button).clicked) {
-      
+      WriteProject(state->project);
    }
 
    RobotProfile *profile = &state->profiles.current;
    ui_field_topdown field = FieldTopdown(page, state->settings.field.image, state->settings.field.size, Size(page->bounds).x);
-   element *field_click = Panel(field.e, field.bounds, Captures(INTERACTION_CLICK));
+   state->path_got_selected = false;
 
-   {
-      AutoNode *starting_node = state->project->starting_node;
-      element *starting_node_panel = Panel(field.e, RectCenterSize(GetPoint(&field, starting_node->pos), V2(10, 10)),
-                                          Captures(INTERACTION_CLICK));
-      DrawNodeGraphic(starting_node_panel, state, starting_node);
-      
-      if(WasClicked(starting_node_panel)) {
-         state->selected_type = NodeSelected;
-         state->selected_node = starting_node;
-      }
-      
-      for(u32 i = 0; i < starting_node->path_count; i++) {
-         DrawPath(&field, state, starting_node->out_paths[i]);
-      }
-   }
+   DrawNode(&field, state, state->project->starting_node, false);
+   
+   InputState *input = &page->context->input_state;
+   bool field_clicked = field.clicked && !state->path_got_selected;
 
    switch(state->selected_type) {
       case NodeSelected: {
-         if(WasClicked(field_click)) {
+         AutoNode *selected_node = state->selected_node;
+         
+         if(field_clicked) {
             AutoPath *new_path = PushStruct(&state->project_arena, AutoPath);
             AutoNode *new_node = PushStruct(&state->project_arena, AutoNode);
             
-            new_node->pos = PixelsToFeet(&field, Cursor(field_click) - field.bounds.min) - 0.5 * field.size_in_ft;
+            new_node->pos = PixelsToFeet(&field, Cursor(field.e) - field.bounds.min) - 0.5 * field.size_in_ft;
             new_path->in_node = state->selected_node;
-            new_path->out_node = new_node;
             
-            AutoPath **new_out_paths = PushArray(&state->project_arena, AutoPath *, state->selected_node->path_count + 1);
-            Copy(state->selected_node->out_paths, state->selected_node->path_count * sizeof(AutoPath *), new_out_paths);
-            new_out_paths[state->selected_node->path_count] = new_path;
+            if(new_path->in_node == state->project->starting_node) {
+               v2 direction_arrow = V2(cosf(state->project->starting_angle * (PI32 / 180)), 
+                                       -sinf(state->project->starting_angle * (PI32 / 180)));
+      
+               new_path->in_tangent = direction_arrow;
+            } else {
+               new_path->in_tangent = Normalize(new_path->out_node->pos - new_path->in_node->pos);
+            }
+            new_path->out_node = new_node;
+            new_path->out_tangent = Normalize(new_path->out_node->pos - new_path->in_node->pos);
+            
+            AutoPath **new_out_paths = PushArray(&state->project_arena, AutoPath *, selected_node->path_count + 1);
+            Copy(selected_node->out_paths, selected_node->path_count * sizeof(AutoPath *), new_out_paths);
+            new_out_paths[selected_node->path_count] = new_path;
 
-            state->selected_node->path_count = state->selected_node->path_count + 1;
-            state->selected_node->out_paths = new_out_paths;
+            selected_node->path_count = selected_node->path_count + 1;
+            selected_node->out_paths = new_out_paths;
          }
 
          element *node_panel = ColumnPanel(page, V2(Size(page).x - 10, 500), Padding(5, 5));
          Background(node_panel, dark_grey);
+
+         for(u32 i = 0; i < selected_node->path_count; i++) {
+            AutoPath *curr_path = selected_node->out_paths[i];
+            UI_SCOPE(node_panel->context, curr_path);
+            
+            if(Button(node_panel, ToString(i), menu_button).clicked) {
+               state->selected_type = PathSelected;
+               state->selected_path = curr_path;
+            }
+         }
+      } break;
+
+      case PathSelected: {
+         AutoPath *selected_path = state->selected_path;
+
+         element *node_panel = ColumnPanel(page, V2(Size(page).x - 10, 500), Padding(5, 5));
+         Background(node_panel, dark_grey);
+         element *node_buttons = RowPanel(node_panel, V2(Size(node_panel).x, page_tab_height));
+         if(Button(node_buttons, "(E)dit Path", menu_button.IsSelected(state->path_edit == EditControlPoints)).clicked ||
+            (input->key_char == 'e'))
+         {
+            state->path_edit = EditControlPoints;
+         }
+         
+         if(Button(node_buttons, "(A)dd Control Point", menu_button.IsSelected(state->path_edit == AddControlPoint)).clicked ||
+            (input->key_char == 'a'))
+         {
+            state->path_edit = AddControlPoint;
+         }
+
+         if(Button(node_buttons, "(R)emove Control Point", menu_button.IsSelected(state->path_edit == RemoveControlPoint)).clicked ||
+            (input->key_char == 'r'))
+         {
+            state->path_edit = RemoveControlPoint;
+         }
+
+         switch(state->path_edit) {
+            case EditControlPoints: {
+               if(selected_path->in_node == state->project->starting_node) {
+                  v2 direction_arrow = V2(cosf(state->project->starting_angle * (PI32 / 180)), 
+                                          -sinf(state->project->starting_angle * (PI32 / 180)));
+                  
+                  v2 handle_pos = GetPoint(&field, selected_path->in_node->pos + selected_path->in_tangent);
+                  element *handle = Panel(field.e, RectCenterSize(handle_pos, V2(10, 10)), Captures(INTERACTION_DRAG));
+                  Line(field.e, BLUE, 2, GetPoint(&field, selected_path->in_node->pos), handle_pos);
+                  Background(handle, BLUE);
+                  
+                  v2 drag_vector = direction_arrow * Dot(direction_arrow, GetDrag(handle));
+                  selected_path->in_tangent = ClampTo(selected_path->in_tangent + PixelsToFeet(&field, drag_vector),
+                                                      (-selected_path->in_node->pos) + RectCenterSize(V2(0, 0), field.size_in_ft));
+               } else {
+                  DrawTangentHandle(&field, selected_path->in_node->pos, &selected_path->in_tangent);
+               }
+               
+               for(u32 i = 0; i < selected_path->control_point_count; i++) {
+                  AutonomousProgram_ControlPoint *control_point = selected_path->control_points + i;
+                  UI_SCOPE(field.e->context, control_point);
+                  DrawTangentHandle(&field, control_point->pos, &control_point->tangent);
+               }
+
+               DrawTangentHandle(&field, selected_path->out_node->pos, &selected_path->out_tangent);
+            } break;
+
+            case AddControlPoint: {
+               u32 control_point_count = selected_path->control_point_count + 2;
+               AutonomousProgram_ControlPoint *control_points = PushTempArray(AutonomousProgram_ControlPoint, control_point_count);
+               control_points[0] = { selected_path->in_node->pos, selected_path->in_tangent };
+               control_points[control_point_count - 1] = { selected_path->out_node->pos, selected_path->out_tangent };
+               Copy(selected_path->control_points, selected_path->control_point_count * sizeof(AutonomousProgram_ControlPoint), control_points + 1);
+
+               bool add_point = false;
+               AutonomousProgram_ControlPoint new_point = {};
+               u32 insert_index = 0;
+
+               for(u32 i = 1; i < control_point_count; i++) {
+                  v2 new_pos = CubicHermiteSpline(control_points[i - 1], control_points[i], 0.5);
+                  element *new_button = Panel(field.e, RectCenterSize(GetPoint(&field, new_pos), V2(10, 10)), Captures(INTERACTION_CLICK));
+                  Background(new_button, BLUE);
+                  if(IsHot(new_button)) {
+                     Outline(new_button, BLACK);
+                  }
+
+                  if(WasClicked(new_button)) {
+                     insert_index = i - 1;
+                     new_point.pos = new_pos;
+                     new_point.tangent = CubicHermiteSplineTangent(control_points[i - 1], control_points[i], 0.5);
+                     add_point = true;
+                  }
+               }
+
+               if(add_point) {
+                  AutonomousProgram_ControlPoint *new_control_points =
+                     PushArray(&state->project_arena, AutonomousProgram_ControlPoint, selected_path->control_point_count + 1);
+
+                  u32 before_count = insert_index;
+                  u32 after_count = selected_path->control_point_count - insert_index;
+                  Copy(selected_path->control_points, before_count * sizeof(AutonomousProgram_ControlPoint), new_control_points);
+                  Copy(selected_path->control_points + before_count, after_count * sizeof(AutonomousProgram_ControlPoint), new_control_points + before_count + 1);
+                  new_control_points[insert_index] = new_point; 
+
+                  selected_path->control_points = new_control_points;
+                  selected_path->control_point_count++;
+               }
+            } break;
+         }
       } break;
    }
 
-   InputState *input = &page->context->input_state;
    if(input->key_esc) {
       state->selected_type = NothingSelected;
    }

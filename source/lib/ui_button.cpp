@@ -33,6 +33,12 @@ struct button_style {
       result.flags |= (enabled ? 0 : BUTTON_DISABLED);
       return result;
    }
+
+   button_style Padding(f32 x, f32 y) {
+      button_style result = *this;
+      result.padding = V2(x, y);
+      return result;
+   }
 };
 
 button_style ButtonStyle(v4 colour, v4 selected_colour, v4 disabled_colour, 
