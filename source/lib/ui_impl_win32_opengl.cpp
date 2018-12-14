@@ -831,6 +831,12 @@ void endFrame(ui_impl_win32_window *window, element *root) {
    debug_root->cliprect = RectMinSize(V2(0, 0), window->size);
    ColumnLayout(debug_root);
 
+   button_style menu_button = ButtonStyle(
+      V4(53/255.0, 56/255.0, 57/255.0, 1), V4(89/255.0, 89/255.0, 89/255.0, 1), BLACK,
+      V4(89/255.0, 89/255.0, 89/255.0, 1), V4(120/255.0, 120/255.0, 120/255.0, 1), WHITE, 
+      WHITE, V4(89/255.0, 89/255.0, 89/255.0, 1),
+      30, V2(0, 0), V2(0, 0));
+
    switch(context->debug_mode) {
       case UIDebugMode_ElementPick: {
          if(context->debug_hot_e != NULL) {
@@ -852,6 +858,34 @@ void endFrame(ui_impl_win32_window *window, element *root) {
             Label(debug_root, "Selected ID not drawn", 30, WHITE);
          } else {
             Outline(debug_root, debug_selected_e->bounds, BLACK, 2);
+            
+            if(debug_selected_e->parent != NULL) {
+               element *parent = debug_selected_e->parent;
+               ui_button parent_button = Button(debug_root, "Parent", menu_button);
+               
+               if(IsHot(parent_button.e)) {
+                  Outline(debug_root, parent->bounds, BLACK, 2);
+               }
+               
+               if(parent_button.clicked) {
+                  context->debug_selected = parent->id;
+               }
+            }
+
+            for(element *child = debug_selected_e->first_child; 
+                child; child = child->next)
+            {
+               UI_SCOPE(context, child);
+               ui_button child_button = Button(debug_root, "Child", menu_button);
+               
+               if(IsHot(child_button.e)) {
+                  Outline(debug_root, child->bounds, BLACK, 2);
+               }
+               
+               if(child_button.clicked) {
+                  context->debug_selected = child->id;
+               }
+            }
          }
       } break;
 
@@ -878,6 +912,8 @@ void endFrame(ui_impl_win32_window *window, element *root) {
    
          Assert(memory_unit_index < ArraySize(memory_units));
          Label(debug_root, Concat(ToString((u32) memory_value), memory_units[memory_unit_index], Literal(" Allocated")), 20, WHITE);
+      
+         //TODO: per arena diagnostics
       } break;
    }
 

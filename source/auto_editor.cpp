@@ -219,6 +219,37 @@ f32 MinDistFrom(ui_field_topdown *field, AutonomousProgram_ControlPoint *control
    return result;
 }
 
+#define ArrayInsert(arena, type, original, insert_index, new_elem, count) (type *) _ArrayInsert(arena, (u8 *) (original), insert_index, (u8 *) (new_elem), sizeof(type), count)
+u8 *_ArrayInsert(MemoryArena *arena, u8 *original, u32 insert_index, 
+                 u8 *new_elem, u32 element_size, u32 count)
+{
+   u8 *result = PushSize(arena, element_size * (count + 1));
+
+   u32 before_count = insert_index;
+   u32 after_count = count - insert_index;
+   Copy(original, before_count * element_size, result);
+   Copy(original + element_size * before_count, after_count * element_size, result + (before_count + 1) * element_size);
+   Copy(new_elem, element_size, result + element_size * insert_index); 
+   return result;
+}
+
+#define ArrayRemove(arena, type, original, remove_index, count) (type *) _ArrayRemove(arena, (u8 *) (original), remove_index, sizeof(type), count)
+u8 *_ArrayRemove(MemoryArena *arena, u8 *original, 
+                 u32 remove_index, u32 element_size, u32 count)
+{
+   u8 *result = PushSize(arena, element_size * (count - 1));
+
+   u32 before_count = remove_index;
+   Copy(original, before_count * element_size, result);
+   Copy(original + element_size * (remove_index + 1), 
+         (count - remove_index - 1) * element_size, result + before_count * element_size);
+   return result;
+}
+
+string GetName(AutoCommand *command) {
+   return Concat(command->subsystem_name, Literal(":"), command->command_name);
+}
+
 void DrawPath(ui_field_topdown *field, EditorState *state, AutoPath *path) {
    UI_SCOPE(field->e->context, path);
    
@@ -358,7 +389,10 @@ void DrawEditingView(element *page, EditorState *state) {
          element *edit_panel = ColumnPanel(page, V2(Size(page).x - 10, 500), Padding(5, 5));
          Background(edit_panel, dark_grey);
          element *edit_buttons = RowPanel(edit_panel, V2(Size(edit_panel).x, page_tab_height));
-         
+         element *command_lists = RowPanel(edit_panel, V2(Size(edit_panel).x, Size(edit_panel).y - page_tab_height)); 
+         element *available_command_list = VerticalList(Panel(command_lists, V2(Size(command_lists).x / 2, Size(command_lists).y)));
+         element *command_list = VerticalList(Panel(command_lists, V2(Size(command_lists).x / 2, Size(command_lists).y)));
+
          if(selected_node != state->project->starting_node) {
             if(Button(edit_buttons, "Delete", menu_button.IsSelected(state->path_edit == EditControlPoints)).clicked) {
                AutoPath *in_path = selected_node->in_path;
@@ -385,6 +419,45 @@ void DrawEditingView(element *page, EditorState *state) {
                state->selected_type = NothingSelected;
                state->selected_node = NULL;
             }
+         }
+
+         ForEachArray(i, subsystem, profile->subsystem_count, profile->subsystems, {
+            ForEachArray(j, command, subsystem->command_count, subsystem->commands, {
+               if(Button(available_command_list, Concat(subsystem->name, Literal(":"), command->name), menu_button).clicked) {
+                  AutoCommand new_command = {};
+                  new_command.subsystem_name = PushCopy(&state->project_arena, subsystem->name);
+                  new_command.command_name = PushCopy(&state->project_arena, command->name);
+                  new_command.param_count = command->param_count;
+                  new_command.params = PushArray(&state->project_arena, f32, command->param_count);
+
+                  selected_node->commands =
+                     ArrayInsert(&state->project_arena, AutoCommand, selected_node->commands,
+                                 0, &new_command, selected_node->command_count++); 
+               }
+            });
+         });
+
+         bool remove_command = false;
+         u32 remove_index = 0;
+
+         ForEachArray(i, command, selected_node->command_count, selected_node->commands, {
+            UI_SCOPE(command_list, command);
+            element *command_panel = ColumnPanel(command_list, V2(Size(command_list).x, 120), Padding(0, 5));
+            Outline(command_panel, light_grey);
+
+            if(Button(command_panel, "Delete", menu_button).clicked) {
+               remove_command = true;
+               remove_index = i;
+            }
+
+            string text = Concat(GetName(command), Literal("(...)"));
+            Label(command_panel, text, 20, WHITE);
+         });
+
+         if(remove_command) {
+            selected_node->commands =
+                     ArrayRemove(&state->project_arena, AutoCommand, selected_node->commands,
+                                 remove_index, selected_node->command_count--); 
          }
       } break;
 
@@ -451,6 +524,7 @@ void DrawEditingView(element *page, EditorState *state) {
                u32 insert_index = 0;
 
                for(u32 i = 1; i < control_point_count; i++) {
+                  UI_SCOPE(field.e, i);
                   v2 new_pos = CubicHermiteSpline(control_points[i - 1], control_points[i], 0.5);
                   element *new_button = Panel(field.e, RectCenterSize(GetPoint(&field, new_pos), V2(10, 10)), Captures(INTERACTION_CLICK));
                   Background(new_button, BLUE);
@@ -467,16 +541,9 @@ void DrawEditingView(element *page, EditorState *state) {
                }
 
                if(add_point) {
-                  AutonomousProgram_ControlPoint *new_control_points =
-                     PushArray(&state->project_arena, AutonomousProgram_ControlPoint, selected_path->control_point_count + 1);
-
-                  u32 before_count = insert_index;
-                  u32 after_count = selected_path->control_point_count - insert_index;
-                  Copy(selected_path->control_points, before_count * sizeof(AutonomousProgram_ControlPoint), new_control_points);
-                  Copy(selected_path->control_points + before_count, after_count * sizeof(AutonomousProgram_ControlPoint), new_control_points + before_count + 1);
-                  new_control_points[insert_index] = new_point; 
-
-                  selected_path->control_points = new_control_points;
+                  selected_path->control_points = 
+                     ArrayInsert(&state->project_arena, AutonomousProgram_ControlPoint, selected_path->control_points,
+                                 insert_index, &new_point, selected_path->control_point_count);
                   selected_path->control_point_count++;
                }
             } break;

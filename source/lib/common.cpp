@@ -822,6 +822,7 @@ u32 arena_blocks_allocated = 0;
                new_link->next = result;
                result = new_link;
             } while(FindNextFileA(handle, &file));
+            FindClose(handle);
          }
          return result;
       }
@@ -830,7 +831,7 @@ u32 arena_blocks_allocated = 0;
          char full_path[MAX_PATH + 1];
          sprintf(full_path, "%.*s%s", exe_directory.length, exe_directory.text, path);
          
-         FILETIME last_write_time;
+         FILETIME last_write_time = {};
          HANDLE file_handle = CreateFileA(in_exe_directory ? full_path : path, GENERIC_READ, FILE_SHARE_READ,
                                           NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
          
@@ -918,7 +919,7 @@ u32 arena_blocks_allocated = 0;
                changed = true;
             }
          }
-
+         
          for(FileWatcherLink *curr = watcher->first_in_list;
              curr; curr = curr->next_in_list)
          {

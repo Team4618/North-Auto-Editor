@@ -193,24 +193,6 @@ struct UIContext {
    InputState input_state;
 };
 
-//----------------------------------------------------
-//TODO: test this, remove most uses of POINTER_UI_ID
-#define UI_SCOPE(context, ptr) _ui_scope _UI_SCOPE_##__LINE__ ((context), POINTER_UI_ID(ptr)); 
-struct _ui_scope {
-   UIContext *context;
-   ui_id prev_scope_id;
-
-   _ui_scope(UIContext *context_in, ui_id scope_id) {
-      context = context_in;
-      prev_scope_id = context->scope_id;
-      context->scope_id = scope_id;
-   }
-
-   ~_ui_scope() {
-      context->scope_id = prev_scope_id;
-   }
-};
-//----------------------------------------------------
 typedef rect2 (*layout_callback)(element *e, u8 *layout_data, v2 element_size, v2 padding_size, v2 margin_size);
 
 struct element {
@@ -241,6 +223,31 @@ v2 Size(element *e) {
 v2 Center(element *e) {
    return Center(e->bounds);
 }
+
+//----------------------------------------------------
+//TODO: test this, remove most uses of POINTER_UI_ID
+#define UI_SCOPE(context_or_e, ptr) _ui_scope _UI_SCOPE_##__LINE__ ((context_or_e), POINTER_UI_ID(ptr)); 
+struct _ui_scope {
+   UIContext *context;
+   ui_id prev_scope_id;
+
+   _ui_scope(UIContext *context_in, ui_id scope_id) {
+      context = context_in;
+      prev_scope_id = context->scope_id;
+      context->scope_id = scope_id;
+   }
+
+   _ui_scope(element *e, ui_id scope_id) {
+      context = e->context;
+      prev_scope_id = context->scope_id;
+      context->scope_id = scope_id;
+   }
+
+   ~_ui_scope() {
+      context->scope_id = prev_scope_id;
+   }
+};
+//----------------------------------------------------
 
 element *beginFrame(v2 window_size, UIContext *context, f32 dt) {
    context->hot_e = context->new_hot_e;
@@ -283,6 +290,7 @@ element *beginFrame(v2 window_size, UIContext *context, f32 dt) {
    root->context = context;
    root->bounds = RectMinSize(V2(0, 0), window_size);
    root->cliprect = RectMinSize(V2(0, 0), window_size);
+   root->id.loc = "root";
    return root;
 }
 
