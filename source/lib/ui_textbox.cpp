@@ -20,7 +20,7 @@ struct ui_textbox {
 #define TextBox(...) _TextBox(GEN_UI_ID, __VA_ARGS__)
 ui_textbox _TextBox(ui_id id, element *parent, TextBoxData *data, f32 line_height) {
    UIContext *context = parent->context;
-   element *e = _Panel(id, parent, V2(/*GetMaxCharWidth(font, line_height)*/ 50 * data->size, line_height), Captures(INTERACTION_SELECT));
+   element *e = _Panel(id, parent, V2(/*GetMaxCharWidth(font, line_height)*/ 15 * data->size, line_height), Captures(INTERACTION_SELECT));
 
    string drawn_text = { data->text, data->used };
    Background(e, V4(0.7, 0.7, 0.7, 1));
@@ -78,6 +78,7 @@ ui_textbox _TextBox(ui_id id, element *parent, TextBoxData *data, f32 line_heigh
 }
 
 #define StaticTextBoxData(name, char_count) static TextBoxData name = {}; do{ static char __buffer[char_count] = {}; name.text = __buffer; name.size = ArraySize(__buffer); }while(false) 
+#define InitTextBoxData(data, buffer) do{ (data)->text = (buffer); (data)->size = ArraySize(buffer); }while(false)
 
 string GetText(TextBoxData data) {
    return String(data.text, data.used);
@@ -85,6 +86,12 @@ string GetText(TextBoxData data) {
 
 string GetText(ui_textbox textbox) {
    return GetText(*textbox.data);
+}
+
+void SetText(TextBoxData *data, string text) {
+   u32 size = Min(text.length, data->size);
+   data->used = size;
+   Copy(text.text, size, data->text);
 }
 
 void Clear(ui_textbox textbox) {

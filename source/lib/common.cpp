@@ -158,24 +158,25 @@ bool IsUInt(string s) {
 
 struct MemoryArenaBlock {
    MemoryArenaBlock *next;
+   
    u64 size;
    u64 used;
    u8 *memory;
 };
 
-typedef MemoryArenaBlock *(*allocator_callback)(u64 size);
-
 struct MemoryArena {
-   allocator_callback allocator;
    u64 initial_size;
 
    bool valid;
    MemoryArena *parent;
+   MemoryArenaBlock *latest_block;
+   u64 latest_used;
    
    MemoryArenaBlock *first_block;
    MemoryArenaBlock *curr_block;
 };
 
+MemoryArenaBlock *PlatformAllocArenaBlock(u64 size);
 u8 *PushSize(MemoryArena *arena, u64 size) {
    Assert(arena->valid);
 
@@ -183,23 +184,48 @@ u8 *PushSize(MemoryArena *arena, u64 size) {
    if((curr_block->size - curr_block->used) <= size) {
       if(curr_block->next == NULL) {
          //TODO: what size should we allocate?
-         MemoryArenaBlock *new_block = arena->allocator(Max(arena->initial_size, size));
+         MemoryArenaBlock *new_block = PlatformAllocArenaBlock(Max(arena->initial_size, size));
+         
          curr_block->next = new_block;
          arena->curr_block = new_block;
       } else {
          arena->curr_block = curr_block->next; 
       }
-
-      //TODO: this could technically get stuck in a loop, we need to test this new system
-      //the old one was super simple and this one isnt so much
-      return PushSize(arena, size);
-   } else {
-      u8 *result = curr_block->memory + curr_block->used;
-      curr_block->used += size;
-      _Zero(result, size);
-   
-      return result;
    }
+
+   u8 *result = curr_block->memory + curr_block->used;
+   curr_block->used += size;
+   _Zero(result, size);
+
+   return result;
+}
+
+MemoryArena BeginTemp(MemoryArena *arena) {
+   MemoryArena result = {};
+   result.initial_size = arena->initial_size;
+   result.first_block = arena->first_block;
+   result.curr_block = arena->curr_block;
+
+   result.valid = true;
+   result.parent = arena;
+   result.latest_block = arena->curr_block;
+   result.latest_used = arena->curr_block->used;
+
+   arena->valid = false;
+   return result;
+}
+
+void EndTemp(MemoryArena *temp) {
+   temp->latest_block->used = temp->latest_used;
+   for(MemoryArenaBlock *block = temp->latest_block->next;
+       block; block = block->next)
+   {
+      block->used = 0;
+   } 
+
+   temp->valid = false;
+   temp->parent->curr_block = temp->latest_block;
+   temp->parent->valid = true;
 }
 
 #define PushStruct(arena, struct) (struct *) PushSize(arena, sizeof(struct))
@@ -287,6 +313,18 @@ void WriteString(buffer *b, string str) {
 #define WriteStructData(b, type, name, code) do { type name = {}; code WriteStruct(b, &name); } while(false)
 
 MemoryArena __temp_arena;
+
+struct TempArena {
+   MemoryArena arena;
+
+   TempArena(MemoryArena *_arena = &__temp_arena) {
+      arena = BeginTemp(_arena);
+   } 
+
+   ~TempArena() {
+      EndTemp(&arena);
+   }
+};
 
 #define PushTempSize(size) PushSize(&__temp_arena, (size))
 #define PushTempStruct(struct) (struct *) PushSize(&__temp_arena, sizeof(struct))
@@ -616,6 +654,17 @@ inline rect2 Overlap(rect2 a, rect2 b) {
    return result;
 }
 
+inline rect2 Union(rect2 a, rect2 b) {
+   rect2 result = {};
+   
+   result.min.x = Min(a.min.x, b.min.x);
+   result.min.y = Min(a.min.y, b.min.y);
+   result.max.x = Max(a.max.x, b.max.x);
+   result.max.y = Max(a.max.y, b.max.y);
+   
+   return result;
+}
+
 union mat4 {
    f32 e[16];
 };
@@ -667,7 +716,7 @@ u32 arena_blocks_allocated = 0;
 
       //TODO: take a look at the weird memory usage
       MemoryArenaBlock *PlatformAllocArenaBlock(u64 size) {
-         //OutputDebugStringA("Allocating Arena Block\n");
+         OutputDebugStringA("Allocating Arena Block\n");
          total_size_requested += size;
          total_size_allocated += (sizeof(MemoryArenaBlock) + size);
          arena_blocks_allocated++;
@@ -675,16 +724,16 @@ u32 arena_blocks_allocated = 0;
          MemoryArenaBlock *result = (MemoryArenaBlock *) VirtualAlloc(0, sizeof(MemoryArenaBlock) + size, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
          result->size = size;
          result->used = 0;
-         result->next = 0;
+         result->next = NULL;
          result->memory = (u8 *) (result + 1);
          return result;
       }
 
       MemoryArena PlatformAllocArena(u64 initial_size) {
+         OutputDebugStringA("Allocating Arena\n");
          arenas_allocated++;
          
          MemoryArena result = {};
-         result.allocator = PlatformAllocArenaBlock;
          result.first_block = PlatformAllocArenaBlock(initial_size);
          result.curr_block = result.first_block;
          result.initial_size = initial_size;

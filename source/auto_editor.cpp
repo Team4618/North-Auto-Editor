@@ -51,6 +51,9 @@ struct EditorState {
    MemoryArena project_arena;
    AutoProjectLink *project;
 
+   TextBoxData project_name_box;
+   char _project_name_box[20];
+
    FileWatcher file_watcher;
    bool directory_changed;
 
@@ -71,6 +74,7 @@ void initEditor(EditorState *state) {
    state->project_arena = PlatformAllocArena(Megabyte(30));
    state->file_lists_arena = PlatformAllocArena(Megabyte(10));
 
+   InitTextBoxData(&state->project_name_box, state->_project_name_box);
    InitFileWatcher(&state->file_watcher, PlatformAllocArena(Kilobyte(512)), "*.*");
 }
 
@@ -108,6 +112,7 @@ void DrawOpenFileView(element *page, EditorState *state) {
          if(Button(page, file->name, menu_button).clicked) {
             Reset(&state->project_arena);
             state->project = ReadAutoProject(file->name, &state->project_arena);
+            SetText(&state->project_name_box, state->project->name);
             state->view = EditorView_Editing;
          }
       }
@@ -124,7 +129,7 @@ void DrawNewFileView(element *page, EditorState *state) {
 
    RobotProfile *profile = &state->profiles.current;
    ui_field_topdown field = FieldTopdown(page, state->settings.field.image, state->settings.field.size,
-                                         Size(page->bounds).x);
+                                         Clamp(0, Size(page->bounds).x, 700));
 
    v2 robot_size_px =  FeetToPixels(&field, profile->size);
    for(u32 i = 0; i < state->settings.field.starting_position_count; i++) {
@@ -144,7 +149,6 @@ void DrawNewFileView(element *page, EditorState *state) {
       if(WasClicked(field_starting_pos)) {
          Reset(&state->project_arena);
          state->project = PushStruct(&state->project_arena, AutoProjectLink);
-         state->project->name = Literal("auto_project");
          state->project->starting_angle = starting_pos->angle;
 
          state->project->starting_node = PushStruct(&state->project_arena, AutoNode);
@@ -292,16 +296,28 @@ void DrawEditingView(element *page, EditorState *state) {
    Assert(state->project != NULL);
 
    Panel(state->top_bar, V2(40, Size(state->top_bar).y));
-   //TODO: make this a textbox
-   Label(state->top_bar, state->project->name, Size(state->top_bar).y, WHITE);
+   
+   ui_textbox project_name_box = TextBox(state->top_bar, &state->project_name_box, Size(state->top_bar).y);
+   if(IsSelected(project_name_box.e))
+      Outline(project_name_box.e, (GetText(project_name_box).length > 0) ? GREEN : RED);
+   
+   state->project->name = GetText(project_name_box);
+
    Panel(state->top_bar, V2(40, Size(state->top_bar).y));
-   if(Button(state->top_bar, "Save", menu_button).clicked) {
+   if(Button(state->top_bar, "Save", menu_button.IsEnabled(GetText(project_name_box).length > 0)).clicked) {
       WriteProject(state->project);
    }
 
+   static float field_width = 700;
+   field_width = Clamp(0, Size(page->bounds).x, field_width);
+
    RobotProfile *profile = &state->profiles.current;
-   ui_field_topdown field = FieldTopdown(page, state->settings.field.image, state->settings.field.size, Size(page->bounds).x);
+   ui_field_topdown field = FieldTopdown(page, state->settings.field.image, state->settings.field.size, field_width);
    state->path_got_selected = false;
+
+   element *resize_divider = Panel(page, V2(Size(page).x - 10, 10), Padding(5, 5).Captures(INTERACTION_DRAG));
+   Background(resize_divider, dark_grey);
+   field_width += GetDrag(resize_divider).y * (field.size_in_ft.x / field.size_in_ft.y);
 
    DrawNode(&field, state, state->project->starting_node, false);
    
@@ -317,6 +333,7 @@ void DrawEditingView(element *page, EditorState *state) {
             AutoNode *new_node = PushStruct(&state->project_arena, AutoNode);
             
             new_node->pos = PixelsToFeet(&field, Cursor(field.e) - field.bounds.min) - 0.5 * field.size_in_ft;
+            new_node->in_path = new_path;
             new_path->in_node = state->selected_node;
             
             if(new_path->in_node == state->project->starting_node) {
@@ -338,16 +355,35 @@ void DrawEditingView(element *page, EditorState *state) {
             selected_node->out_paths = new_out_paths;
          }
 
-         element *node_panel = ColumnPanel(page, V2(Size(page).x - 10, 500), Padding(5, 5));
-         Background(node_panel, dark_grey);
+         element *edit_panel = ColumnPanel(page, V2(Size(page).x - 10, 500), Padding(5, 5));
+         Background(edit_panel, dark_grey);
+         element *edit_buttons = RowPanel(edit_panel, V2(Size(edit_panel).x, page_tab_height));
+         
+         if(selected_node != state->project->starting_node) {
+            if(Button(edit_buttons, "Delete", menu_button.IsSelected(state->path_edit == EditControlPoints)).clicked) {
+               AutoPath *in_path = selected_node->in_path;
+               AutoNode *parent = in_path->in_node;
 
-         for(u32 i = 0; i < selected_node->path_count; i++) {
-            AutoPath *curr_path = selected_node->out_paths[i];
-            UI_SCOPE(node_panel->context, curr_path);
-            
-            if(Button(node_panel, ToString(i), menu_button).clicked) {
-               state->selected_type = PathSelected;
-               state->selected_path = curr_path;
+               u32 remove_index = -1;
+               for(u32 i = 0; i < parent->path_count; i++) {
+                  if(parent->out_paths[i] == in_path) {
+                     remove_index = i;
+                     break;
+                  }
+               }
+
+               Assert(remove_index != -1);
+               AutoPath **new_out_paths = PushArray(&state->project_arena, AutoPath *, parent->path_count - 1);
+
+               u32 before_count = remove_index;
+               Copy(parent->out_paths, before_count * sizeof(AutoPath *), new_out_paths);
+               Copy(parent->out_paths + (remove_index + 1), (parent->path_count - remove_index - 1) * sizeof(AutoPath *), new_out_paths + before_count);
+                     
+               parent->out_paths = new_out_paths;
+               parent->path_count--;
+
+               state->selected_type = NothingSelected;
+               state->selected_node = NULL;
             }
          }
       } break;
@@ -355,22 +391,22 @@ void DrawEditingView(element *page, EditorState *state) {
       case PathSelected: {
          AutoPath *selected_path = state->selected_path;
 
-         element *node_panel = ColumnPanel(page, V2(Size(page).x - 10, 500), Padding(5, 5));
-         Background(node_panel, dark_grey);
-         element *node_buttons = RowPanel(node_panel, V2(Size(node_panel).x, page_tab_height));
-         if(Button(node_buttons, "(E)dit Path", menu_button.IsSelected(state->path_edit == EditControlPoints)).clicked ||
+         element *edit_panel = ColumnPanel(page, V2(Size(page).x - 10, 500), Padding(5, 5));
+         Background(edit_panel, dark_grey);
+         element *edit_buttons = RowPanel(edit_panel, V2(Size(edit_panel).x, page_tab_height));
+         if(Button(edit_buttons, "(E)dit Path", menu_button.IsSelected(state->path_edit == EditControlPoints)).clicked ||
             (input->key_char == 'e'))
          {
             state->path_edit = EditControlPoints;
          }
          
-         if(Button(node_buttons, "(A)dd Control Point", menu_button.IsSelected(state->path_edit == AddControlPoint)).clicked ||
+         if(Button(edit_buttons, "(A)dd Control Point", menu_button.IsSelected(state->path_edit == AddControlPoint)).clicked ||
             (input->key_char == 'a'))
          {
             state->path_edit = AddControlPoint;
          }
 
-         if(Button(node_buttons, "(R)emove Control Point", menu_button.IsSelected(state->path_edit == RemoveControlPoint)).clicked ||
+         if(Button(edit_buttons, "(R)emove Control Point", menu_button.IsSelected(state->path_edit == RemoveControlPoint)).clicked ||
             (input->key_char == 'r'))
          {
             state->path_edit = RemoveControlPoint;
@@ -450,6 +486,12 @@ void DrawEditingView(element *page, EditorState *state) {
 
    if(input->key_esc) {
       state->selected_type = NothingSelected;
+   }
+
+   if(Button(state->top_bar, "Exit", menu_button).clicked) {
+      Reset(&state->project_arena);
+      state->project = NULL;
+      state->view = EditorView_Blank;
    }
 }
 

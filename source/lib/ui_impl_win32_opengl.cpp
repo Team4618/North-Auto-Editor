@@ -119,13 +119,16 @@ glyph_texture *getOrLoadGlyph(loaded_font *font, u32 codepoint) {
       glyph_texture *new_glyph = PushStruct(&font->arena, glyph_texture);
       new_glyph->codepoint = codepoint;
       
+      //TODO: make sure this works as expected
+      TempArena temp_arena;
+
       f32 line_height = 100;    
       f32 scale = stbtt_ScaleForPixelHeight(&font->fontinfo, line_height);
       
       //NOTE: stb_truetype has SDF generation so we _could_ use that 
       s32 w, h;
       u8 *mono = stbtt_GetCodepointBitmap(&font->fontinfo, 0, scale, codepoint, &w, &h, 0, 0);
-      u32 *rgba = PushTempArray(u32, w * h);
+      u32 *rgba = PushArray(&temp_arena.arena, u32, w * h);
       
       u8 *mono_curr = mono;
       u32 *rgba_curr = rgba;
@@ -626,10 +629,6 @@ void DrawRenderCommandBuffer(RenderCommand *first_command, rect2 bounds, mat4 tr
 
 void DrawElement(element *e, mat4 transform, ui_impl_win32_window *window) {
    DrawRenderCommandBuffer(e->first_command, e->cliprect, transform, window);
-
-   if(e->context->debug_mode) {
-      //TODO: draw boxes for interaction captures
-   }
    
    uiTick(e);
 
@@ -725,9 +724,22 @@ bool PumpMessages(ui_impl_win32_window *window, UIContext *ui) {
 
          case WM_KEYUP: {
             switch(msg.wParam) {
-               case VK_F1:
-                  ui->debug_mode = !ui->debug_mode;
-                  break;
+               case VK_F1: {
+                  if(ui->debug_mode == UIDebugMode_Disabled) {
+                     ui->debug_mode = UIDebugMode_ElementPick;
+                  } else {
+                     ui->debug_mode = UIDebugMode_Disabled;
+                  }
+               } break;
+
+               case VK_F2: {
+                  if(ui->debug_mode == UIDebugMode_Disabled) {
+                     ui->debug_mode = UIDebugMode_Memory;
+                  } else {
+                     ui->debug_mode = UIDebugMode_Disabled;
+                  }
+               } break;
+
                case VK_ESCAPE:
                   input->key_esc = true;
                   break;
@@ -801,6 +813,7 @@ bool PumpMessages(ui_impl_win32_window *window, UIContext *ui) {
 
 void endFrame(ui_impl_win32_window *window, element *root) {
    UIContext *context = root->context;
+   InputState *input = &context->input_state;
    Reset(&context->filedrop_arena);
    context->filedrop_count = 0;
    context->filedrop_names = NULL;
@@ -812,30 +825,71 @@ void endFrame(ui_impl_win32_window *window, element *root) {
    mat4 transform = Orthographic(0, window->size.y, 0, window->size.x, 100, -100);
    DrawElement(root, transform, window);
    
-   if(context->debug_mode) {
-      element *debug_root = PushStruct(&context->frame_arena, element);
-      debug_root->context = context;
-      debug_root->bounds = RectMinSize(V2(0, 0), window->size);
-      debug_root->cliprect = RectMinSize(V2(0, 0), window->size);
-      ColumnLayout(debug_root);
-      
-      Label(debug_root, Concat(Literal("Time: "), ToString((f32) context->curr_time)), 60, WHITE);
-      Label(debug_root, Concat(Literal("FPS: "), ToString((f32) context->fps)), 60, WHITE);
+   element *debug_root = PushStruct(&context->frame_arena, element);
+   debug_root->context = context;
+   debug_root->bounds = RectMinSize(V2(0, 0), window->size);
+   debug_root->cliprect = RectMinSize(V2(0, 0), window->size);
+   ColumnLayout(debug_root);
 
-      //TODO: calculate this based on the sizes of the labels
-      rect2 background_bounds = RectMinSize(V2(0, 0), V2(400, 400));
-      Rectangle(debug_root, background_bounds, V4(0, 0, 0, 0.75));
-      
-      //TODO: memory debugging stuff
+   switch(context->debug_mode) {
+      case UIDebugMode_ElementPick: {
+         if(context->debug_hot_e != NULL) {
+            string hot_e_loc = Literal(context->debug_hot_e->id.loc);
+            Outline(debug_root, context->debug_hot_e->bounds, BLACK, 2);
 
-      if(context->debug_hot_e != NULL) {
-         string hot_e_loc = Literal(context->debug_hot_e->id.loc);
-         Label(debug_root, Concat(Literal("Mousing Over "), hot_e_loc), 30, WHITE);
-         Outline(debug_root, context->debug_hot_e->bounds, BLACK, 5);
-      }
+            if(input->left_up) {
+               context->debug_selected = context->debug_hot_e->id;
+               context->debug_mode = UIDebugMode_ElementSelected;
+            }
+         }
+      } break;
 
-      DrawElement(debug_root, transform, window);
+      case UIDebugMode_ElementSelected: {
+         element *debug_selected_e = context->debug_selected_e;
+         Label(debug_root, context->debug_selected.loc, 30, WHITE);
+
+         if(debug_selected_e == NULL) {
+            Label(debug_root, "Selected ID not drawn", 30, WHITE);
+         } else {
+            Outline(debug_root, debug_selected_e->bounds, BLACK, 2);
+         }
+      } break;
+
+      case UIDebugMode_Memory: {
+         Label(debug_root, Concat(Literal("Time: "), ToString((f32) context->curr_time)), 20, WHITE);
+         Label(debug_root, Concat(Literal("FPS: "), ToString((f32) context->fps)), 20, WHITE);
+         Label(debug_root, Concat(ToString(arena_blocks_allocated), Literal(" Arena Blocks Allocated")), 20, WHITE);
+         Label(debug_root, Concat(ToString(arenas_allocated), Literal(" Arenas Allocated")), 20, WHITE);
+
+         string memory_units[] = {
+            Literal(" Bytes"),
+            Literal(" KB"),
+            Literal(" MB"),
+            Literal(" GB")
+         };
+
+         u64 memory_value = total_size_allocated;
+         u32 memory_unit_index = 0;
+
+         while(memory_value >= 1024) {
+            memory_value /= 1024;
+            memory_unit_index++;
+         }
+   
+         Assert(memory_unit_index < ArraySize(memory_units));
+         Label(debug_root, Concat(ToString((u32) memory_value), memory_units[memory_unit_index], Literal(" Allocated")), 20, WHITE);
+      } break;
    }
+
+   
+   rect2 background_bounds = RectMinSize(V2(0, 0), V2(0, 0));
+   for(element *child = debug_root->first_child; 
+       child; child = child->next)
+   {
+      background_bounds = Union(background_bounds, child->bounds);
+   }
+   Rectangle(debug_root, background_bounds, V4(0, 0, 0, 0.75));   
+   DrawElement(debug_root, transform, window);
 
    SwapBuffers(window->gl.dc);
 }

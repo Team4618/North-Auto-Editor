@@ -218,7 +218,8 @@ void DrawSettings(element *full_page, NorthSettings *state,
          field_data_changed |= SettingsRow(page, "Field Mirrored (eg. Steamworks)", &state->field.flags, Field_Flags::MIRRORED, V2(20, 20)).clicked;
          field_data_changed |= SettingsRow(page, "Field Symmetric (eg. Power Up)", &state->field.flags, Field_Flags::SYMMETRIC, V2(20, 20)).clicked;
 
-         ui_field_topdown field = FieldTopdown(page, state->field.image, state->field.size, Size(page->bounds).x);
+         ui_field_topdown field = FieldTopdown(page, state->field.image, state->field.size,
+                                               Clamp(0, Size(page->bounds).x, 700));
          Label(page, robot_size_label, 20, BLACK);
 
          v2 robot_size_px =  FeetToPixels(&field, robot_size_ft);

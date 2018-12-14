@@ -8,7 +8,6 @@ struct ui_field_topdown {
 #define FieldTopdown(...) _FieldTopdown(GEN_UI_ID, __VA_ARGS__)
 ui_field_topdown _FieldTopdown(ui_id id, element *parent, texture background_image, 
                    v2 size_in_ft, f32 width) {
-   width = Clamp(0, 700, width);
    v2 size = V2(width, size_in_ft.y  * (width / size_in_ft.x));
    f32 x_padding = (Size(parent->bounds).x - size.x) / 2;
    element *e = _Panel(id, parent, size, Padding(x_padding, 0).Captures(INTERACTION_CLICK));

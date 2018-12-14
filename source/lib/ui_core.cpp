@@ -130,10 +130,22 @@ struct persistent_hash_link {
    u8 *data;
 };
 
+enum UIDebugMode {
+   UIDebugMode_Disabled,
+   UIDebugMode_ElementPick,
+   UIDebugMode_ElementSelected,
+   UIDebugMode_Memory
+};
+
 struct element;
 struct UIContext {
    MemoryArena frame_arena;
    loaded_font *font;
+
+   UIDebugMode debug_mode;
+   element *debug_hot_e;
+   ui_id debug_selected;
+   element *debug_selected_e;
 
    MemoryArena persistent_arena;
    persistent_hash_link *persistent_hash[128];
@@ -176,9 +188,6 @@ struct UIContext {
    f32 fps;
 
    ui_id scope_id;
-
-   bool debug_mode;
-   element *debug_hot_e;
 
    //below will probably get rewritten   
    InputState input_state;
@@ -267,6 +276,7 @@ element *beginFrame(v2 window_size, UIContext *context, f32 dt) {
    context->fps = 1.0 / dt;
 
    context->debug_hot_e = NULL;
+   context->debug_selected_e = NULL;
 
    Reset(&context->frame_arena);
    element *root = PushStruct(&context->frame_arena, element);
@@ -409,7 +419,7 @@ rect2 GetCharBounds(UIContext *context, string text, u32 i, v2 pos, f32 line_hei
 void Text(element *e, ui_text_layout layed_out_text, v2 pos, v4 colour) {   
    UIContext *context = e->context;
 
-   if(context->debug_mode) {
+   if(context->debug_mode == UIDebugMode_ElementPick) {
       Line(e, BLACK, 2,
            pos + V2(0, layed_out_text.baseline), 
            pos + V2(Size(layed_out_text.text_bounds).x, layed_out_text.baseline));
@@ -530,62 +540,68 @@ void uiTick(element *e) {
    UIContext *context = e->context;
    InputState *input = &context->input_state; 
 
-   if(e->captures & INTERACTION_HOT) {
-      bool can_become_hot = (context->active_e == NULL_UI_ID) || (context->active_e == e->id);
-      if(Contains(e->bounds, input->pos) && can_become_hot) {
-         context->new_hot_e = e->id;
+   if(context->debug_mode == UIDebugMode_ElementPick) {
+      if(Contains(e->bounds, input->pos)) {
+         context->debug_hot_e = e;
       }
-   }
-
-   if(e->captures & _INTERACTION_ACTIVE) {
-      bool can_become_active = IsHot(e) && input->left_down;
-      bool should_remain_active = IsActive(e) && input->left_down;
-      if(can_become_active || should_remain_active) {
-         context->new_active_e = e->id;
+   } else {
+      if(e->captures & INTERACTION_HOT) {
+         bool can_become_hot = (context->active_e == NULL_UI_ID) || (context->active_e == e->id);
+         if(Contains(e->bounds, input->pos) && can_become_hot) {
+            context->new_hot_e = e->id;
+         }
       }
-   }
 
-   if(e->captures & _INTERACTION_CLICK) {
-      if(IsActive(e) && IsHot(e) && input->left_up) {
-         context->new_clicked_e = e->id;
+      if(e->captures & _INTERACTION_ACTIVE) {
+         bool can_become_active = IsHot(e) && input->left_down;
+         bool should_remain_active = IsActive(e) && input->left_down;
+         if(can_become_active || should_remain_active) {
+            context->new_active_e = e->id;
+         }
+      }
 
-         if(e->captures & _INTERACTION_SELECT) {
-            context->selected_e = IsSelected(e) ? NULL_UI_ID : e->id;
+      if(e->captures & _INTERACTION_CLICK) {
+         if(IsActive(e) && IsHot(e) && input->left_up) {
+            context->new_clicked_e = e->id;
+
+            if(e->captures & _INTERACTION_SELECT) {
+               context->selected_e = IsSelected(e) ? NULL_UI_ID : e->id;
+            }
+         }
+      }
+
+      if(e->captures & _INTERACTION_DRAG) {
+         if(IsActive(e)) {
+            context->new_dragged_e = e->id;
+            context->new_drag = input->pos - input->last_pos;
+         }
+      }
+
+      if(e->captures & _INTERACTION_VERTICAL_SCROLL) {
+         if(ContainsCursor(e)) {
+            context->new_vscroll_e = e->id;
+            context->new_vscroll = input->vscroll;
+         }
+      }
+
+      if(e->captures & _INTERACTION_HORIZONTAL_SCROLL) {
+         if(ContainsCursor(e)) {
+            context->new_hscroll_e = e->id;
+            context->new_hscroll = input->hscroll;
+         }
+      }
+
+      if(e->captures & _INTERACTION_FILEDROP) {
+         if(IsHot(e)) {
+            context->new_filedrop_e = e->id;
          }
       }
    }
 
-   if(e->captures & _INTERACTION_DRAG) {
-      if(IsActive(e)) {
-         context->new_dragged_e = e->id;
-         context->new_drag = input->pos - input->last_pos;
-      }
+   if(e->id == context->debug_selected) {
+      context->debug_selected_e = e;
    }
-
-   if(e->captures & _INTERACTION_VERTICAL_SCROLL) {
-      if(ContainsCursor(e)) {
-         context->new_vscroll_e = e->id;
-         context->new_vscroll = input->vscroll;
-      }
-   }
-
-   if(e->captures & _INTERACTION_HORIZONTAL_SCROLL) {
-      if(ContainsCursor(e)) {
-         context->new_hscroll_e = e->id;
-         context->new_hscroll = input->hscroll;
-      }
-   }
-
-   if(e->captures & _INTERACTION_FILEDROP) {
-      if(IsHot(e)) {
-         context->new_filedrop_e = e->id;
-      }
-   }
-
-   if(context->debug_mode && Contains(e->bounds, input->pos)) {
-      context->debug_hot_e = e;
-   }
- }
+}
 
 //---------------------------------------------------------------------
 
