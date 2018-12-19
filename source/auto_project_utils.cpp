@@ -9,6 +9,9 @@ struct AutoCommand {
    string command_name;
    u32 param_count;
    f32 *params;
+
+   bool has_conditional;
+   string conditional;
 };
 
 struct AutoPath;
@@ -32,7 +35,10 @@ struct AutoContinuousEvent {
 
 struct AutoDiscreteEvent {
    f32 distance;
-   AutoCommand command;
+   string subsystem_name;
+   string command_name;
+   u32 param_count;
+   f32 *params;
 };
 
 struct AutoPath {   
@@ -42,6 +48,9 @@ struct AutoPath {
    v2 out_tangent;
 
    bool is_reverse;
+   bool hidden;
+
+   bool has_conditional;
    string conditional;
 
    u32 velocity_datapoint_count;
@@ -71,7 +80,7 @@ struct AutoProjectList {
 };
 
 AutoCommand CreateCommand(MemoryArena *arena, string subsystem_name, string command_name,
-                           u32 param_count, f32 *params) 
+                           u32 param_count, f32 *params, string conditional) 
 {
    AutoCommand result = {};
    result.subsystem_name = PushCopy(arena, subsystem_name);
@@ -79,6 +88,8 @@ AutoCommand CreateCommand(MemoryArena *arena, string subsystem_name, string comm
    result.param_count = param_count;
    result.params = PushArray(arena, f32, param_count);
    Copy(params, sizeof(f32) * param_count, result.params);
+   result.conditional = PushCopy(arena, conditional);
+   result.has_conditional = conditional.length > 0;
    return result;
 }
 
@@ -98,7 +109,9 @@ AutoNode *ParseAutoNode(buffer *file, MemoryArena *arena) {
       string subsystem_name = ConsumeString(file, file_command->subsystem_name_length);
       string command_name = ConsumeString(file, file_command->command_name_length);
       f32 *params = ConsumeArray(file, f32, file_command->parameter_count);
-      result->commands[i] = CreateCommand(arena, subsystem_name, command_name, file_command->parameter_count, params);
+      string conditional = ConsumeString(file, file_command->conditional_length);
+      
+      result->commands[i] = CreateCommand(arena, subsystem_name, command_name, file_command->parameter_count, params, conditional);
    }
    
    for(u32 i = 0; i < file_node->path_count; i++) {
@@ -119,8 +132,10 @@ AutoPath *ParseAutoPath(buffer *file, MemoryArena *arena) {
 
    if(file_path->conditional_length == 0) {
       path->conditional = EMPTY_STRING;
+      path->has_conditional = false;
    } else {
       path->conditional =  PushCopy(arena, ConsumeString(file, file_path->conditional_length));
+      path->has_conditional = true;
    }
 
    path->control_point_count = file_path->control_point_count;
@@ -156,8 +171,10 @@ AutoPath *ParseAutoPath(buffer *file, MemoryArena *arena) {
       string command_name = ConsumeString(file, file_event->command_name_length);
       f32 *params = ConsumeArray(file, f32, file_event->parameter_count);
       
-      event->command = CreateCommand(arena, subsystem_name, command_name, 
-                                     file_event->parameter_count, params);
+      event->subsystem_name = PushCopy(arena, subsystem_name);
+      event->command_name = PushCopy(arena, command_name);
+      event->param_count = file_event->parameter_count;
+      event->params = PushArrayCopy(arena, f32, params, file_event->parameter_count);
       event->distance = file_event->distance;
    }
 
@@ -213,14 +230,18 @@ void WriteAutoNode(buffer *file, AutoNode *node) {
    });
 
    ForEachArray(i, command, node->command_count, node->commands, {
-      WriteStructData(file,AutonomousProgram_Command, command_header, {
+      WriteStructData(file, AutonomousProgram_Command, command_header, {
          command_header.subsystem_name_length = command->subsystem_name.length;
          command_header.command_name_length = command->command_name.length;
          command_header.parameter_count = command->param_count;
+         command_header.conditional_length = command->has_conditional ? command->conditional.length : 0;
       });
       WriteString(file, command->subsystem_name);
       WriteString(file, command->command_name);
       WriteArray(file, command->params, command->param_count);
+      
+      if(command->has_conditional)
+         WriteString(file, command->conditional);
    });
 
    ForEachArray(i, path, node->path_count, node->out_paths, {
@@ -234,14 +255,17 @@ void WriteAutoPath(buffer *file, AutoPath *path) {
       path_header.out_tangent = path->out_tangent;
       path_header.is_reverse = path->is_reverse ? 1 : 0;
       
-      path_header.conditional_length = path->conditional.length;
+      path_header.conditional_length = path->has_conditional ? path->conditional.length : 0;
       path_header.control_point_count = path->control_point_count;
 
       path_header.velocity_datapoint_count = path->velocity_datapoint_count;
       path_header.continuous_event_count = path->continuous_event_count;
       path_header.discrete_event_count = path->discrete_event_count;
    });
-   WriteString(file, path->conditional);
+
+   if(path->has_conditional)
+      WriteString(file, path->conditional);
+   
    WriteArray(file, path->control_points, path->control_point_count);
    
    WriteArray(file, path->velocity_datapoints, path->velocity_datapoint_count);
@@ -258,13 +282,13 @@ void WriteAutoPath(buffer *file, AutoPath *path) {
    ForEachArray(i, event, path->discrete_event_count, path->discrete_events, {
       WriteStructData(file, AutonomousProgram_DiscreteEvent, event_header, {
          event_header.distance = event->distance;
-         event_header.subsystem_name_length = event->command.subsystem_name.length;
-         event_header.command_name_length = event->command.command_name.length;
-         event_header.parameter_count = event->command.param_count;
+         event_header.subsystem_name_length = event->subsystem_name.length;
+         event_header.command_name_length = event->command_name.length;
+         event_header.parameter_count = event->param_count;
       });
-      WriteString(file, event->command.subsystem_name);
-      WriteString(file, event->command.command_name);
-      WriteArray(file, event->command.params, event->command.param_count);
+      WriteString(file, event->subsystem_name);
+      WriteString(file, event->command_name);
+      WriteArray(file, event->params, event->param_count);
    });
 
    WriteAutoNode(file, path->out_node);

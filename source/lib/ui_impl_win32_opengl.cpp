@@ -659,6 +659,8 @@ bool PumpMessages(ui_impl_win32_window *window, UIContext *ui) {
    input->key_left_arrow = false;
    input->key_right_arrow = false;
    input->key_esc = false;
+   input->alt_down = GetKeyState(VK_MENU) & 0x8000;
+   input->ctrl_down = GetKeyState(VK_CONTROL) & 0x8000;
 
    MSG msg = {};
    while(PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
@@ -692,9 +694,7 @@ bool PumpMessages(ui_impl_win32_window *window, UIContext *ui) {
                case 0x08:
                   input->key_backspace = true;
                   break;
-               case 0x0D:
-                  input->key_enter = true;
-                  break;
+               case 0x0D:  // enter
                case 0x0A:  // linefeed 
                case 0x1B:  // escape 
                case 0x09:  // tab 
@@ -718,6 +718,9 @@ bool PumpMessages(ui_impl_win32_window *window, UIContext *ui) {
                   break;
                case VK_RIGHT:
                   input->key_right_arrow = true;
+                  break;
+               case VK_RETURN:
+                  input->key_enter = true;
                   break;
             }
          } break;
@@ -824,6 +827,7 @@ void endFrame(ui_impl_win32_window *window, element *root) {
 
    mat4 transform = Orthographic(0, window->size.y, 0, window->size.x, 100, -100);
    DrawElement(root, transform, window);
+   DrawRenderCommandBuffer(context->overlay->first_command, context->overlay->cliprect, transform, window);
    
    element *debug_root = PushStruct(&context->frame_arena, element);
    debug_root->context = context;
@@ -916,7 +920,6 @@ void endFrame(ui_impl_win32_window *window, element *root) {
          //TODO: per arena diagnostics
       } break;
    }
-
    
    rect2 background_bounds = RectMinSize(V2(0, 0), V2(0, 0));
    for(element *child = debug_root->first_child; 

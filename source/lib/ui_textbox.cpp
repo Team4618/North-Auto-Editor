@@ -104,98 +104,106 @@ void CopyStringToTextbox(string s, TextBoxData *textbox) {
    textbox->used = length;
 }
 
-//TODO: clean up number boxes
 struct numberbox_persistent_data { 
    bool init;
    char buffer[8];
    TextBoxData text;
-   union {
-      u32 last_u32;
-      f32 last_f32;
-   };
 };
 
 struct ui_numberbox {
    ui_textbox textbox;
    bool valid_enter;
-   bool valid_changed;
    bool enter;
    bool valid;
+
+   union {
+      u32 u32_value;
+      f32 f32_value;
+   };
 };
 
-//TODO: do we only want to set "value" when we actually change the textbox (textbox.changed)?
-ui_numberbox _TextBox(ui_id id, element *parent, u32 *value, f32 line_height) {
+typedef bool (*numberbox_is_valid_callback)(string text);
+
+ui_numberbox _TextBox(ui_id id, element *parent, string value, f32 line_height, 
+                      numberbox_is_valid_callback valid_func = IsUInt)
+{
    UIContext *context = parent->context;
    numberbox_persistent_data *data = (numberbox_persistent_data *) _GetOrAllocate(id, context, sizeof(numberbox_persistent_data));
-   
+   InputState *input = &context->input_state;
+
    if(!data->init) {
       data->init = true;
       data->text.text = data->buffer;
       data->text.size = ArraySize(data->buffer);
 
-      CopyStringToTextbox(ToString(*value), &data->text);
-   }
-
-   if(*value != data->last_u32) {
-      CopyStringToTextbox(ToString(*value), &data->text);
+      CopyStringToTextbox(value, &data->text);
    }
 
    ui_textbox textbox = _TextBox(id, parent, &data->text, line_height);
-   bool valid = (data->text.used > 0) && IsUInt(GetText(data->text));
+   bool valid = (data->text.used > 0) && valid_func(GetText(data->text));
+   bool different_values = valid ? (GetText(data->text) != value) : true;
 
-   if(valid) {
-      *value = ToU32(GetText(data->text));
+   v4 outline_colour;
+   if(!valid) { 
+      outline_colour = RED;
+   } else if(different_values) {
+      outline_colour = V4(1, 165.0/255.0, 0, 1);
+   } else {
+      outline_colour = GREEN;
+   }
+   
+   Outline(textbox.e, outline_colour, IsSelected(textbox.e) ? 4 : 2);
+
+   if(IsSelected(textbox.e) && input->key_enter && input->ctrl_down) {
+      CopyStringToTextbox(value, &data->text);
    }
 
-   if(IsSelected(textbox.e)) {
-      Outline(textbox.e, valid ? GREEN : RED);
+   if((IsHot(textbox.e) || IsSelected(textbox.e)) && different_values) {
+      v2 overlay_pos = textbox.e->bounds.min - V2(0, Size(textbox.e).y);
+      Rectangle(context->overlay, RectMinSize(overlay_pos, Size(textbox.e)), V4(0.7, 0.7, 0.7, 1));
+      Text(context->overlay, Concat(Literal("Current Value:"), value), overlay_pos, line_height, BLACK);
    }
-
-   data->last_u32 = *value;
 
    ui_numberbox result = {};
    result.textbox = textbox;
    result.valid_enter = textbox.enter && valid;
-   result.valid_changed = textbox.changed && valid;
    result.enter = textbox.enter;
    result.valid = valid;
    return result;
 }
 
-ui_numberbox _TextBox(ui_id id, element *parent, f32 *value, f32 line_height) {
-   UIContext *context = parent->context;
-   numberbox_persistent_data *data = (numberbox_persistent_data *) _GetOrAllocate(id, context, sizeof(numberbox_persistent_data));
-   
-   if(!data->init) {
-      data->init = true;
-      data->text.text = data->buffer;
-      data->text.size = ArraySize(data->buffer);
+ui_numberbox _TextBox(ui_id id, element *parent, u32 value, f32 line_height, 
+                      numberbox_is_valid_callback valid_func = IsUInt)
+{
+   ui_numberbox result = _TextBox(id, parent, ToString(value), line_height, valid_func);
+   result.u32_value = result.valid ? ToU32(GetText(result.textbox)) : 0;
+   return result;
+}
 
-      CopyStringToTextbox(ToString(*value), &data->text);
+ui_numberbox _TextBox(ui_id id, element *parent, u32 *value, f32 line_height, 
+                      numberbox_is_valid_callback valid_func = IsUInt)
+{
+   ui_numberbox result = _TextBox(id, parent, *value, line_height, valid_func);
+   if(result.valid_enter) {
+      *value = result.u32_value;
    }
+   return result;
+}
 
-   if(*value != data->last_f32) {
-      CopyStringToTextbox(ToString(*value), &data->text);
+ui_numberbox _TextBox(ui_id id, element *parent, f32 value, f32 line_height, 
+                      numberbox_is_valid_callback valid_func = IsNumber)
+{
+   ui_numberbox result = _TextBox(id, parent, ToString(value), line_height, valid_func);
+   result.f32_value = result.valid ? ToF32(GetText(result.textbox)) : 0;
+   return result;
+}
+
+ui_numberbox _TextBox(ui_id id, element *parent, f32 *value, f32 line_height, 
+                      numberbox_is_valid_callback valid_func = IsNumber)
+{
+   ui_numberbox result = _TextBox(id, parent, *value, line_height, valid_func);
+   if(result.valid_enter) {
+      *value = result.f32_value;
    }
-
-   ui_textbox textbox = _TextBox(id, parent, &data->text, line_height);
-   bool valid = (data->text.used > 0) && IsNumber(GetText(data->text));
-
-   if(valid) {
-      *value = ToF32(GetText(data->text));
-   }
-
-   if(IsSelected(textbox.e)) {
-      Outline(textbox.e, valid ? GREEN : RED);
-   }
-
-   data->last_f32 = *value;
-
-   ui_numberbox result = {};
-   result.textbox = textbox;
-   result.valid_enter = textbox.enter && valid; 
-   result.valid_changed = textbox.changed && valid; 
-   result.enter = textbox.enter;
-   result.valid = valid;
    return result;
 }

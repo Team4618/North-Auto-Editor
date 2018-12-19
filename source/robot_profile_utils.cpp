@@ -42,6 +42,9 @@ struct RobotProfile {
    
    u32 subsystem_count;
    RobotProfileSubsystem *subsystems;
+
+   u32 conditional_count;
+   string *conditionals;
 };
 
 bool IsValid(RobotProfile *profile) {
@@ -50,11 +53,18 @@ bool IsValid(RobotProfile *profile) {
 
 void EncodeProfileFile(RobotProfile *profile, buffer *file) {
    WriteStructData(file, RobotProfile_FileHeader, s, {
+      s.conditional_count = profile->conditional_count;
       s.subsystem_count = profile->subsystem_count;
       s.robot_width = profile->size.x;
       s.robot_length = profile->size.y;
    });
    
+   ForEachArray(i, cond, profile->conditional_count, profile->conditionals, {
+      u8 len = cond->length;
+      WriteStruct(file, &len);
+      WriteString(file, *cond);
+   });
+
    ForEachArray(i, subsystem, profile->subsystem_count, profile->subsystems, {
       WriteStructData(file, RobotProfile_SubsystemDescription, s, {
          s.name_length = subsystem->name.length;
@@ -110,6 +120,13 @@ void RecieveWelcomePacket(RobotProfile *profile, buffer packet) {
    profile->size = V2(header->robot_width, header->robot_length);
    profile->subsystem_count = header->subsystem_count;
    profile->subsystems = PushArray(arena, RobotProfileSubsystem, profile->subsystem_count);
+   profile->conditional_count = header->conditional_count;
+   profile->conditionals = PushArray(arena, string, profile->conditional_count);
+
+   for(u32 i = 0; i < header->conditional_count; i++) {
+      u8 len = *ConsumeStruct(&packet, u8);
+      profile->conditionals[i] = PushCopy(arena, ConsumeString(&packet, len));
+   }
 
    for(u32 i = 0; i < header->subsystem_count; i++) {
       Welcome_SubsystemDescription *desc = ConsumeStruct(&packet, Welcome_SubsystemDescription);
@@ -154,6 +171,20 @@ RobotProfileParameter *GetParameter(RobotProfileSubsystem *subsystem, string nam
       RobotProfileParameter *param = subsystem->params + i;
       if(param->name == name) {
          return param;
+      }
+   }
+
+   return NULL;
+}
+
+RobotProfileCommand *GetCommand(RobotProfile *profile, string subsystem_name, string command_name) {
+   RobotProfileSubsystem *subsystem = GetSubsystem(profile, subsystem_name);
+   Assert(subsystem);
+
+   for(u32 i = 0; i < subsystem->command_count; i++) {
+      RobotProfileCommand *command = subsystem->commands + i;
+      if(command->name == command_name) {
+         return command;
       }
    }
 
@@ -226,6 +257,13 @@ void ParseProfileFile(RobotProfile *profile, buffer file, string name) {
    profile->size = V2(header->robot_width, header->robot_length);
    profile->subsystem_count = header->subsystem_count;
    profile->subsystems = PushArray(arena, RobotProfileSubsystem, header->subsystem_count);
+   profile->conditional_count = header->conditional_count;
+   profile->conditionals = PushArray(arena, string, header->conditional_count);
+
+   for(u32 i = 0; i < header->conditional_count; i++) {
+      u8 len = *ConsumeStruct(&file, u8);
+      profile->conditionals[i] = PushCopy(arena, ConsumeString(&file, len));
+   }
 
    for(u32 i = 0; i < header->subsystem_count; i++) {
       RobotProfile_SubsystemDescription *file_subsystem = ConsumeStruct(&file, RobotProfile_SubsystemDescription);
@@ -364,6 +402,11 @@ void DrawProfiles(element *full_page, RobotProfiles *profiles, FileListLink *ncr
                }
                Label(subsystem_page, Concat(command->name, Literal("("), params, Literal(")")), 18, BLACK, V2(20, 0));  
             }
+         }
+
+         Label(page, "Conditionals", 20, BLACK, V2(0, 20));
+         for(u32 j = 0; j < profile->conditional_count; j++) {
+            Label(page, profile->conditionals[j], 18, BLACK, V2(20, 0));
          }
       } else {
          selector_open = true;

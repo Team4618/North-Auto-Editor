@@ -95,10 +95,12 @@ namespace RobotProfile_Flags {
 struct RobotProfile_FileHeader {
 #define ROBOT_PROFILE_MAGIC_NUMBER RIFF_CODE("NCRP") 
 #define ROBOT_PROFILE_CURR_VERSION 0
+   u8 conditional_count;
    u8 subsystem_count;
    f32 robot_width;
    f32 robot_length;
    u32 flags;
+   //{ u8 length; char [length]; } [conditional_count]
    //RobotProfile_SubsystemDescription [subsystem_count]
 };
 //-----------------------------------------------------------
@@ -224,9 +226,11 @@ struct AutonomousProgram_Command {
    u8 subsystem_name_length;
    u8 command_name_length;
    u8 parameter_count;
+   u8 conditional_length;
    //char [subsystem_name_length]
    //char [command_name_length]
    //f32 [parameter_count]
+   //char [conditional_length]
 };
 
 struct AutonomousProgram_Node {

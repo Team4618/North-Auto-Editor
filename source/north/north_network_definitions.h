@@ -70,11 +70,13 @@ namespace Welcome_Flags {
 
 struct Welcome_PacketHeader {
    u8 robot_name_length;
+   u8 conditional_count;
    u8 subsystem_count;
    f32 robot_width;
    f32 robot_length;
    u32 flags;
    //char name[robot_name_length]
+   //{ u8 length; char [length]; } [conditional_count]
    //Welcome_SubsystemDescription [subsystem_count]
 };
 //-----------------------------------------

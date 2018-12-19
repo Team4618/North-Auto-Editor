@@ -114,6 +114,7 @@ void DrawOpenFileView(element *page, EditorState *state) {
             state->project = ReadAutoProject(file->name, &state->project_arena);
             SetText(&state->project_name_box, state->project->name);
             state->view = EditorView_Editing;
+            state->selected_type = NothingSelected;
          }
       }
    } else {
@@ -246,6 +247,29 @@ u8 *_ArrayRemove(MemoryArena *arena, u8 *original,
    return result;
 }
 
+#define ArrayMove(type, array, count, from, to) _ArrayMove(sizeof(type), (u8 *) (array), count, from, to)
+void _ArrayMove(u32 size, u8 *array, u32 count, u32 from, u32 to) {
+   TempArena temp_arena;
+   u8 *temp_array = PushSize(&temp_arena.arena, count * size);
+
+   if(to == from)
+      return;
+
+   if(to > from) {
+      Copy(array, from * size, temp_array);
+      Copy(array + (from + 1) * size, (to - from) * size, temp_array + from * size);
+      Copy(array + from * size, size, temp_array + to * size);
+      Copy(array + (to + 1) * size, (count - to) * size, temp_array + (to + 1) * size);
+   } else if(to < from) {
+      Copy(array, to * size, temp_array);
+      Copy(array + from * size, size, temp_array + to * size);
+      Copy(array + to * size, (from - to) * size, temp_array + (to + 1) * size);
+      Copy(array + (from + 1) * size, (count - from) * size, temp_array + (from + 1) * size);
+   }
+
+   Copy(temp_array, count * size, array);
+}
+
 string GetName(AutoCommand *command) {
    return Concat(command->subsystem_name, Literal(":"), command->command_name);
 }
@@ -253,6 +277,9 @@ string GetName(AutoCommand *command) {
 void DrawPath(ui_field_topdown *field, EditorState *state, AutoPath *path) {
    UI_SCOPE(field->e->context, path);
    
+   if(path->hidden)
+      return;
+
    u32 control_point_count = path->control_point_count + 2;
    AutonomousProgram_ControlPoint *control_points = PushTempArray(AutonomousProgram_ControlPoint, control_point_count);
    control_points[0] = { path->in_node->pos, path->in_tangent };
@@ -313,13 +340,15 @@ void DrawPath(ui_field_topdown *field, EditorState *state, AutoPath *path) {
    DrawNode(field, state, path->out_node);
 }
 
-void DrawTangentHandle(ui_field_topdown *field, v2 pos, v2 *tangent) {
+#define DrawTangentHandle(...) _DrawTangentHandle(GEN_UI_ID, __VA_ARGS__) 
+void _DrawTangentHandle(ui_id id, ui_field_topdown *field, v2 pos, v2 *tangent, bool along_normal, v2 normal) {
    v2 handle_pos = GetPoint(field, pos + *tangent);
-   element *handle = Panel(field->e, RectCenterSize(handle_pos, V2(10, 10)), Captures(INTERACTION_DRAG));
+   element *handle = _Panel(id, field->e, RectCenterSize(handle_pos, V2(10, 10)), Captures(INTERACTION_DRAG));
    Line(field->e, BLUE, 2, GetPoint(field, pos), handle_pos);
    Background(handle, BLUE);
 
-   *tangent = ClampTo(*tangent + PixelsToFeet(field, GetDrag(handle)),
+   v2 drag_vector = along_normal ? (normal * Dot(normal, GetDrag(handle))) : GetDrag(handle);      
+   *tangent = ClampTo(*tangent + PixelsToFeet(field, drag_vector),
                       (-pos) + RectCenterSize(V2(0, 0), field->size_in_ft));
 }
 
@@ -386,15 +415,36 @@ void DrawEditingView(element *page, EditorState *state) {
             selected_node->out_paths = new_out_paths;
          }
 
-         element *edit_panel = ColumnPanel(page, V2(Size(page).x - 10, 500), Padding(5, 5));
+         //---------------annoying-layout-stuff-----------------
+         f32 path_list_height = 5 + (40 + 5) * selected_node->path_count;
+         f32 available_command_list_height = 0;
+         f32 command_list_height = 5;
+         
+         ForEachArray(i, subsystem, profile->subsystem_count, profile->subsystems, {
+            ForEachArray(j, command, subsystem->command_count, subsystem->commands, {
+               available_command_list_height += 40;
+            });
+         });
+
+         ForEachArray(i, command, selected_node->command_count, selected_node->commands, {
+            RobotProfileCommand *command_template = GetCommand(profile, command->subsystem_name, command->command_name);
+            Assert(command_template);
+            command_list_height += 100 + 20 * command_template->param_count + 5;    
+         });
+
+         f32 edit_panel_height = page_tab_height + path_list_height + Max(available_command_list_height, command_list_height);
+         //--------------------------------------------------
+
+         element *edit_panel = ColumnPanel(page, V2(Size(page).x - 10, edit_panel_height), Padding(5, 5));
          Background(edit_panel, dark_grey);
          element *edit_buttons = RowPanel(edit_panel, V2(Size(edit_panel).x, page_tab_height));
-         element *command_lists = RowPanel(edit_panel, V2(Size(edit_panel).x, Size(edit_panel).y - page_tab_height)); 
-         element *available_command_list = VerticalList(Panel(command_lists, V2(Size(command_lists).x / 2, Size(command_lists).y)));
-         element *command_list = VerticalList(Panel(command_lists, V2(Size(command_lists).x / 2, Size(command_lists).y)));
+         element *path_list = ColumnPanel(edit_panel, V2(Size(edit_panel).x, path_list_height)); 
+         element *command_lists = RowPanel(edit_panel, V2(Size(edit_panel).x, Max(available_command_list_height, command_list_height))); 
+         element *available_command_list = ColumnPanel(command_lists, V2(Size(command_lists).x / 2, available_command_list_height));
+         element *command_list = ColumnPanel(command_lists, V2(Size(command_lists).x / 2, command_list_height));
 
          if(selected_node != state->project->starting_node) {
-            if(Button(edit_buttons, "Delete", menu_button.IsSelected(state->path_edit == EditControlPoints)).clicked) {
+            if(Button(edit_buttons, "Delete", menu_button).clicked) {
                AutoPath *in_path = selected_node->in_path;
                AutoNode *parent = in_path->in_node;
 
@@ -421,6 +471,29 @@ void DrawEditingView(element *page, EditorState *state) {
             }
          }
 
+         ForEachArray(i, _curr_path, selected_node->path_count, selected_node->out_paths, {
+            AutoPath *curr_path = *_curr_path;
+            UI_SCOPE(path_list->context, curr_path);
+            element *path_panel = RowPanel(path_list, V2(Size(path_list).x - 10, 40), Padding(5, 5));
+            Outline(path_panel, light_grey);
+
+            Label(path_panel, Concat(Literal("Path "), ToString(i)), 20, WHITE);
+            if(Button(path_panel, "Hide", menu_button.IsSelected(curr_path->hidden)).clicked) {
+               curr_path->hidden = !curr_path->hidden;
+            }
+
+            Label(path_panel, "Conditional", 20, WHITE);
+            CheckBox(path_panel, &curr_path->has_conditional, V2(15, 15));
+            if(curr_path->has_conditional) {
+               //TODO: replace this with ui_list_selector
+               for(u32 j = 0; j < profile->conditional_count; j++) {
+                  if(Button(path_panel, profile->conditionals[j], menu_button.IsSelected(profile->conditionals[j] == curr_path->conditional)).clicked) {
+                     curr_path->conditional = PushCopy(&state->project_arena, profile->conditionals[j]);
+                  }
+               }
+            }
+         });
+
          ForEachArray(i, subsystem, profile->subsystem_count, profile->subsystems, {
             ForEachArray(j, command, subsystem->command_count, subsystem->commands, {
                if(Button(available_command_list, Concat(subsystem->name, Literal(":"), command->name), menu_button).clicked) {
@@ -440,24 +513,77 @@ void DrawEditingView(element *page, EditorState *state) {
          bool remove_command = false;
          u32 remove_index = 0;
 
-         ForEachArray(i, command, selected_node->command_count, selected_node->commands, {
-            UI_SCOPE(command_list, command);
-            element *command_panel = ColumnPanel(command_list, V2(Size(command_list).x, 120), Padding(0, 5));
-            Outline(command_panel, light_grey);
+         bool move_command = false;
+         u32 from_index = 0;
+         u32 to_index = 0;
 
-            if(Button(command_panel, "Delete", menu_button).clicked) {
+         ForEachArray(i, command, selected_node->command_count, selected_node->commands, {
+            RobotProfileCommand *command_template = GetCommand(profile, command->subsystem_name, command->command_name);
+            Assert(command_template);
+            
+            UI_SCOPE(command_list, command);
+            element *command_panel = ColumnPanel(command_list, V2(Size(command_list).x, (100 + 20 * command_template->param_count)), Padding(0, 5).Captures(INTERACTION_DRAG));
+            if(IsActive(command_panel)) {
+               Outline(command_panel, WHITE);
+            } else if(IsHot(command_panel)) {
+               Outline(command_panel, V4(120/255.0, 120/255.0, 120/255.0, 1));
+            } else {
+               Outline(command_panel, light_grey);
+            }
+            
+            element *button_row = RowPanel(command_panel, V2(Size(command_panel).x, page_tab_height)); 
+            if(Button(button_row, "Delete", menu_button).clicked) {
                remove_command = true;
                remove_index = i;
             }
+            
+            //TODO: replace these buttons with the ability to drag to reorder the commands
+            if((selected_node->command_count - 1) > i) {
+               if(Button(button_row, "Down", menu_button).clicked) {
+                  move_command = true;
+                  from_index = i;
+                  to_index = i + 1;
+               }
+            }
 
-            string text = Concat(GetName(command), Literal("(...)"));
-            Label(command_panel, text, 20, WHITE);
+            if(i > 0) {
+               if(Button(button_row, "Up", menu_button).clicked) {
+                  move_command = true;
+                  from_index = i;
+                  to_index = i - 1;
+               }
+            }
+
+            element *conditional_row = RowPanel(command_panel, V2(Size(command_panel).x, 40));
+            Label(conditional_row, "Conditional", 20, WHITE);
+            CheckBox(conditional_row, &command->has_conditional, V2(15, 15));
+            if(command->has_conditional) {
+               //TODO: replace this with ui_list_selector
+               for(u32 j = 0; j < profile->conditional_count; j++) {
+                  if(Button(conditional_row, profile->conditionals[j], menu_button.IsSelected(profile->conditionals[j] == command->conditional)).clicked) {
+                     command->conditional = PushCopy(&state->project_arena, profile->conditionals[j]);
+                  }
+               }
+            }
+
+            Label(command_panel, GetName(command), 20, WHITE);
+            for(u32 j = 0; j < command_template->param_count; j++) {
+               f32 *param_value = command->params + j;
+               UI_SCOPE(command_panel->context, param_value);
+               
+               element *param_row = RowPanel(command_panel, V2(Size(command_panel).x, 20)); 
+               Label(param_row, command_template->params[j], 20, WHITE);
+               TextBox(param_row, param_value, 20);
+            }    
          });
 
          if(remove_command) {
             selected_node->commands =
                      ArrayRemove(&state->project_arena, AutoCommand, selected_node->commands,
                                  remove_index, selected_node->command_count--); 
+         } else if(move_command) {
+            ArrayMove(AutoCommand, selected_node->commands, selected_node->command_count,
+                      from_index, to_index);
          }
       } break;
 
@@ -491,25 +617,23 @@ void DrawEditingView(element *page, EditorState *state) {
                   v2 direction_arrow = V2(cosf(state->project->starting_angle * (PI32 / 180)), 
                                           -sinf(state->project->starting_angle * (PI32 / 180)));
                   
-                  v2 handle_pos = GetPoint(&field, selected_path->in_node->pos + selected_path->in_tangent);
-                  element *handle = Panel(field.e, RectCenterSize(handle_pos, V2(10, 10)), Captures(INTERACTION_DRAG));
-                  Line(field.e, BLUE, 2, GetPoint(&field, selected_path->in_node->pos), handle_pos);
-                  Background(handle, BLUE);
+                  DrawTangentHandle(&field, selected_path->in_node->pos, &selected_path->in_tangent,
+                                    true, direction_arrow);
                   
-                  v2 drag_vector = direction_arrow * Dot(direction_arrow, GetDrag(handle));
-                  selected_path->in_tangent = ClampTo(selected_path->in_tangent + PixelsToFeet(&field, drag_vector),
-                                                      (-selected_path->in_node->pos) + RectCenterSize(V2(0, 0), field.size_in_ft));
                } else {
-                  DrawTangentHandle(&field, selected_path->in_node->pos, &selected_path->in_tangent);
+                  DrawTangentHandle(&field, selected_path->in_node->pos, &selected_path->in_tangent,
+                                    input->ctrl_down, Normalize(selected_path->in_tangent));
                }
                
                for(u32 i = 0; i < selected_path->control_point_count; i++) {
                   AutonomousProgram_ControlPoint *control_point = selected_path->control_points + i;
                   UI_SCOPE(field.e->context, control_point);
-                  DrawTangentHandle(&field, control_point->pos, &control_point->tangent);
+                  DrawTangentHandle(&field, control_point->pos, &control_point->tangent,
+                                    input->ctrl_down, Normalize(control_point->tangent));
                }
 
-               DrawTangentHandle(&field, selected_path->out_node->pos, &selected_path->out_tangent);
+               DrawTangentHandle(&field, selected_path->out_node->pos, &selected_path->out_tangent,
+                                 input->ctrl_down, Normalize(selected_path->out_tangent));
             } break;
 
             case AddControlPoint: {

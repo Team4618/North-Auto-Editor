@@ -18,6 +18,18 @@ ui_checkbox _CheckBox(ui_id id, element *parent, bool checked,
    return result;
 }
 
+ui_checkbox _CheckBox(ui_id id, element *parent, bool *value,
+                      v2 size, v2 padding = V2(0, 0), v2 margin = V2(0, 0))
+{
+   
+   ui_checkbox box = _CheckBox(id, parent, *value, size, padding, margin);
+   if(box.clicked) {
+      *value = !(*value);
+   }
+
+   return box;
+}
+
 ui_checkbox _CheckBox(ui_id id, element *parent, u32 *value, u32 flag,
                       v2 size, v2 padding = V2(0, 0), v2 margin = V2(0, 0))
 {

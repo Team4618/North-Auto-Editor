@@ -122,6 +122,8 @@ struct InputState {
    bool key_left_arrow;
    bool key_right_arrow;
    bool key_esc;
+   bool alt_down;
+   bool ctrl_down;
 };
 
 struct persistent_hash_link {
@@ -141,6 +143,8 @@ struct element;
 struct UIContext {
    MemoryArena frame_arena;
    loaded_font *font;
+
+   element *overlay;
 
    UIDebugMode debug_mode;
    element *debug_hot_e;
@@ -286,6 +290,12 @@ element *beginFrame(v2 window_size, UIContext *context, f32 dt) {
    context->debug_selected_e = NULL;
 
    Reset(&context->frame_arena);
+   context->overlay = PushStruct(&context->frame_arena, element);
+   context->overlay->context = context;
+   context->overlay->bounds = RectMinSize(V2(0, 0), window_size);
+   context->overlay->cliprect = RectMinSize(V2(0, 0), window_size);
+   context->overlay->id.loc = "overlay";
+
    element *root = PushStruct(&context->frame_arena, element);
    root->context = context;
    root->bounds = RectMinSize(V2(0, 0), window_size);

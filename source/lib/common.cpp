@@ -96,6 +96,10 @@ bool operator== (string a, string b) {
    return true;
 } 
 
+bool operator!=(string a, string b) {
+   return !(a == b);
+}
+
 bool IsWhitespace(char c) {
    return ((c == ' ') || (c == '\r') || (c == '\t'));
 }

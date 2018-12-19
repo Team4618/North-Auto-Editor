@@ -1,6 +1,19 @@
 struct NorthSettings {
    MemoryArena arena;
    
+   struct {
+      u32 team_number;
+      string field_name;
+
+      struct {
+         bool loaded;
+         v2 size;
+         u32 flags;
+         u32 starting_position_count;
+         Field_StartingPosition starting_positions[16];
+      } field;
+   } saved_data;
+
    u32 team_number;
    string field_name;
 
@@ -13,6 +26,25 @@ struct NorthSettings {
       texture image;
    } field;
 };
+
+bool DifferentThanSaved(NorthSettings *state) {
+   bool result = 
+      (state->saved_data.team_number != state->team_number) ||
+      (state->saved_data.field_name != state->field_name) ||
+      (state->saved_data.field.loaded != state->field.loaded) ||
+      (Length(state->saved_data.field.size - state->field.size) > 0) ||
+      (state->saved_data.field.flags != state->field.flags) ||
+      (state->saved_data.field.starting_position_count != state->field.starting_position_count);
+
+   if(!result) {
+      for(u32 i = 0; i < state->saved_data.field.starting_position_count; i++) {
+         result |= Length(state->saved_data.field.starting_positions[i].pos - state->field.starting_positions[i].pos) > 0;
+         result |= (state->saved_data.field.starting_positions[i].angle != state->field.starting_positions[i].angle);
+      }
+   }
+   
+   return result;
+}
 
 void ReadSettingsFile(NorthSettings *settings) {
    Reset(&settings->arena);
@@ -62,6 +94,14 @@ void ReadSettingsFile(NorthSettings *settings) {
 
       FreeEntireFile(&field_file);
    }
+
+   settings->saved_data.team_number = settings->team_number;
+   settings->saved_data.field_name = PushCopy(&settings->arena, settings->field_name);
+   settings->saved_data.field.loaded = settings->field.loaded;
+   settings->saved_data.field.size = settings->field.size;
+   settings->saved_data.field.flags = settings->field.flags;
+   settings->saved_data.field.starting_position_count = settings->field.starting_position_count;
+   Copy(settings->field.starting_positions, sizeof(settings->field.starting_positions), settings->saved_data.field.starting_positions);
 }
 
 void UpdateFieldFile(NorthSettings *settings) {
@@ -138,7 +178,7 @@ void WriteNewFieldFile(string name, f32 width, f32 height, string img_file_name)
 
 #define SettingsRow(...) _SettingsRow(GEN_UI_ID, __VA_ARGS__)
 ui_numberbox _SettingsRow(ui_id id, element *page, char *label, u32 *num, char *suffix = "") {
-   element *row = Panel(page, V2(Size(page).x, 20), Layout(RowLayout).Margin(0, 5));
+   element *row = RowPanel(page, V2(Size(page).x, 20), Margin(0, 5));
    Label(row, label, 20, BLACK);
    ui_numberbox result = _TextBox(id, row, num, 20);
    Label(row, suffix, 20, BLACK);
@@ -197,26 +237,36 @@ void DrawSettings(element *full_page, NorthSettings *state,
       curr_page = SettingsPage_New;
    }
 
+   static f32 new_field_width = 0;
+   static f32 new_field_height = 0;
+   StaticTextBoxData(new_field_name, 15);
+   static texture image_preview = {};
+   static string image_path = {};
+   static v2 image_size = V2(0, 0);    
+
    if(curr_page == SettingsPage_Main) {
-      Label(page, "Settings", 50, BLACK);
-      
-      bool settings_changed = false;
-      settings_changed |= SettingsRow(page, "Team Number: ", &state->team_number).valid_enter;
-      
-      if(settings_changed) {
+      ui_button save_button = Button(top_panel, "Save", menu_button.IsEnabled(DifferentThanSaved(state))); 
+      if(save_button.clicked) {
          UpdateSettingsFile(state);
+
+         if(state->field.loaded)
+            UpdateFieldFile(state);
       }
 
-      if(state->field.loaded) {
-         bool field_data_changed = false;
+      //TODO: if save_button is hot, highlight things that are different than the current saved file
 
+      Label(page, "Settings", 50, BLACK);
+      SettingsRow(page, "Team Number: ", &state->team_number);
+      
+      if(state->field.loaded) {
          Label(page, state->field_name, 20, BLACK);
          Label(page, "Field Dimensions", 20, BLACK, V2(0, 0), V2(0, 5));
-         field_data_changed |= SettingsRow(page, "Field Width: ", &state->field.size.x, "ft").valid_enter;
-         field_data_changed |= SettingsRow(page, "Field Height: ", &state->field.size.y, "ft").valid_enter;
          
-         field_data_changed |= SettingsRow(page, "Field Mirrored (eg. Steamworks)", &state->field.flags, Field_Flags::MIRRORED, V2(20, 20)).clicked;
-         field_data_changed |= SettingsRow(page, "Field Symmetric (eg. Power Up)", &state->field.flags, Field_Flags::SYMMETRIC, V2(20, 20)).clicked;
+         SettingsRow(page, "Field Width: ", &state->field.size.x, "ft");
+         SettingsRow(page, "Field Height: ", &state->field.size.y, "ft");
+         
+         SettingsRow(page, "Field Mirrored (eg. Steamworks)", &state->field.flags, Field_Flags::MIRRORED, V2(20, 20));
+         SettingsRow(page, "Field Symmetric (eg. Power Up)", &state->field.flags, Field_Flags::SYMMETRIC, V2(20, 20));
 
          ui_field_topdown field = FieldTopdown(page, state->field.image, state->field.size,
                                                Clamp(0, Size(page->bounds).x, 700));
@@ -242,26 +292,23 @@ void DrawSettings(element *full_page, NorthSettings *state,
             Background(starting_pos_panel, BLUE); 
 
             Label(starting_pos_panel, "X: ", 20, BLACK);
-            field_data_changed |= TextBox(starting_pos_panel, &starting_pos->pos.x, 20).valid_changed;
+            TextBox(starting_pos_panel, &starting_pos->pos.x, 20);
             Label(starting_pos_panel, "Y: ", 20, BLACK);
-            field_data_changed |= TextBox(starting_pos_panel, &starting_pos->pos.y, 20).valid_changed;
+            TextBox(starting_pos_panel, &starting_pos->pos.y, 20);
             Label(starting_pos_panel, "Angle: ", 20, BLACK);
-            field_data_changed |= TextBox(starting_pos_panel, &starting_pos->angle, 20).valid_changed;
+            TextBox(starting_pos_panel, &starting_pos->angle, 20);
 
             if(Button(starting_pos_panel, "Delete", menu_button).clicked) {
                for(u32 j = i; j < (state->field.starting_position_count - 1); j++) {
                   state->field.starting_positions[j] = state->field.starting_positions[j + 1];
                }
                state->field.starting_position_count--;
-               field_data_changed = true;
             }
 
             if(IsHot(field_starting_pos) || ContainsCursor(starting_pos_panel)) {
                Outline(field_starting_pos, BLACK);
                Outline(starting_pos_panel, BLACK);
             }
-
-            field_data_changed |= (GetDrag(field_starting_pos).x != 0) || (GetDrag(field_starting_pos).y != 0);
          }
 
          if((state->field.starting_position_count + 1) < ArraySize(state->field.starting_positions)) {
@@ -270,15 +317,14 @@ void DrawSettings(element *full_page, NorthSettings *state,
             if(WasClicked(add_starting_pos)) {
                state->field.starting_position_count++;
                state->field.starting_positions[state->field.starting_position_count - 1] = {};
-               field_data_changed = true;
             }
-         }
-
-         if(field_data_changed) {
-            UpdateFieldFile(state);
          }
       } else {
          Label(page, Concat(state->field_name, Literal(".ncff not found")), 20, BLACK);
+      }
+
+      if(Button(top_panel, "Reload", menu_button).clicked) {
+         ReadSettingsFile(state);
       }
    } else if(curr_page == SettingsPage_Load) {
       if(Button(top_panel, "Exit", menu_button.Padding(20, 0)).clicked) {
@@ -296,13 +342,6 @@ void DrawSettings(element *full_page, NorthSettings *state,
          }
       }
    } else if(curr_page == SettingsPage_New) {      
-      static f32 new_field_width = 0;
-      static f32 new_field_height = 0;
-      StaticTextBoxData(new_field_name, 15);
-      static texture image_preview = {};
-      static string image_path = {};
-      static v2 image_size = V2(0, 0); 
-      
       Label(page, "Create New Field File", 20, off_white);
       ui_textbox name_box = SettingsRow(page, "Name: ", &new_field_name);
       ui_numberbox width_box = SettingsRow(page, "Width: ", &new_field_width, "ft");
@@ -313,7 +352,7 @@ void DrawSettings(element *full_page, NorthSettings *state,
                    height_box.valid && (new_field_height > 0) &&
                    (image_path.length > 0) && (image_preview.handle != 0);
       
-      if(Button(page, "Create", menu_button.IsEnabled(valid)).clicked) {
+      if(Button(top_panel, "Create", menu_button.IsEnabled(valid)).clicked) {
          WriteNewFieldFile(GetText(name_box), new_field_width,
                            new_field_height, image_path);
          curr_page = SettingsPage_Main;
