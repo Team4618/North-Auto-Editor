@@ -87,7 +87,7 @@ ui_button _Button(ui_id id, element *parent, string text, button_style style) {
       Background(e, style.colour);
    }
 
-   Text(e, text, e->bounds.min, Size(e->bounds).y, disabled ? style.disabled_text_colour : style.text_colour);
+   Text(e, text, e->bounds.min, Size(e).y, disabled ? style.disabled_text_colour : style.text_colour);
    
    if(IsActive(e) && !disabled) {
       Outline(e, style.active_outline);

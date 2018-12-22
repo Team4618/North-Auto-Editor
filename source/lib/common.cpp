@@ -410,44 +410,6 @@ f32 Random01() {
 }
 //------------------------------------------------
 
-//-----------------HASH-STUFF---------------------
-//------------------------------------------------
-
-//NOTE: tried to do this with templates, was ugly,
-//      tried with macros, also ugly, try again later
-
-/*
-#define HashAndListPointers(type) \
-   type *next_in_list; \
-   type *next_in_hash;
-
-#define GetOrCreate(result_name, thing_pointer, constructor) \
-   {\
-      auto thing = (thing_pointer); \
-      u32 hash = Hash(name) % ArraySize(state->subsystem_hash); \
-      for(auto *curr = thing->hash[hash]; curr; curr = curr->next_in_hash) { \
-         if(curr->name == name) { \
-            result_name = curr; \
-         } \
-      } \
-      \
-      if(result == NULL) { \
-         auto *new_subsystem = PushStruct(arena, RecorderSubsystem); \
-         new_subsystem->name = PushCopy(arena, name); \
-         \
-         new_subsystem->next_in_hash = state->subsystem_hash[hash]; \
-         new_subsystem->next_in_list = state->first_subsystem; \
-         \
-         state->subsystem_hash[hash] = new_subsystem; \
-         state->first_subsystem = new_subsystem; \
-         state->subsystem_count++; \
-         result = new_subsystem; \
-      } \
-   }
-*/
-
-//------------------------------------------------
-
 #define PI32 3.141592653589793238462
 
 f32 lerp(f32 a, f32 t, f32 b) {
@@ -549,7 +511,24 @@ v2 Perp(v2 v) {
    return V2(v.y, -v.x);
 }
 
+v2 lerp(v2 a, f32 t, v2 b) {
+   return V2(lerp(a.x, t, b.x), lerp(a.y, t, b.y));
+}
+
 #include "math.h"
+
+u32 Power(u32 base, u32 exp) {
+   u32 result = 1;
+   while(exp) {
+      if (exp & 1)
+         result *= base;
+
+      exp /= 2;
+      base *= base;
+   }
+
+   return result;
+}
 
 f32 Length(v2 a) { return sqrtf(a.x * a.x + a.y * a.y); }
 f32 Distance(v2 a, v2 b) { return Length(a - b); }
@@ -577,6 +556,18 @@ v2 Midpoint(v2 a, v2 b) {
 f32 DistFromLine(v2 a, v2 b, v2 p) {
    f32 num = (a.y - b.y) * p.x - (a.x - b.x) * p.y + a.x*b.y - a.y*b.x;
    return abs(num) / sqrtf((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+}
+
+v2 CubicHermiteSpline(v2 a_pos, v2 a_tan, v2 b_pos, v2 b_tan, f32 t) {
+   return (2*t*t*t - 3*t*t + 1)*a_pos + (t*t*t - 2*t*t + t)*a_tan + 
+          (-2*t*t*t + 3*t*t)*b_pos + (t*t*t - t*t)*b_tan;
+}
+
+v2 CubicHermiteSplineTangent(v2 a_pos, v2 a_tan, v2 b_pos, v2 b_tan, f32 t) {
+   return 6*t*(t - 1)*a_pos + 
+          (3*t*t - 4*t + 1)*a_tan + 
+          (6*t - 6*t*t)*b_pos + 
+          (3*t*t - 2*t)*b_tan;
 }
 
 struct rect2 {

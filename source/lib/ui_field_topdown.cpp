@@ -45,18 +45,6 @@ v2 GetPoint(ui_field_topdown *field, v2 p_in_ft) {
    return Center(field->bounds) + FeetToPixels(field, p_in_ft);
 }
 
-v2 CubicHermiteSpline(v2 a_pos, v2 a_tan, v2 b_pos, v2 b_tan, f32 t) {
-   return (2*t*t*t - 3*t*t + 1)*a_pos + (t*t*t - 2*t*t + t)*a_tan + 
-          (-2*t*t*t + 3*t*t)*b_pos + (t*t*t - t*t)*b_tan;
-}
-
-v2 CubicHermiteSplineTangent(v2 a_pos, v2 a_tan, v2 b_pos, v2 b_tan, f32 t) {
-   return 6*t*(t - 1)*a_pos + 
-          (3*t*t - 4*t + 1)*a_tan + 
-          (6*t - 6*t*t)*b_pos + 
-          (3*t*t - 2*t)*b_tan;
-}
-
 void CubicHermiteSpline(ui_field_topdown *field, 
                         v2 a_pos, v2 a_tan, v2 b_pos, v2 b_tan, 
                         v4 colour, f32 thickness = 2)

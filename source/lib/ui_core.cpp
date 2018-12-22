@@ -446,8 +446,6 @@ void Text(element *e, ui_text_layout layed_out_text, v2 pos, v4 colour) {
 
    for(u32 i = 0; i < layed_out_text.glyph_count; i++) {
       ui_glyph_layout *glyph = layed_out_text.glyphs + i;
-      
-      //TODO: actually respect the text colour
       Texture(e, glyph->glyph_tex->tex, pos + glyph->bounds, colour);
    }
 }
@@ -461,9 +459,6 @@ void Text(element *e, string text, v2 pos, f32 line_height, v4 colour) {
 void Text(element *e, char *s, v2 pos, f32 height, v4 colour) {
    Text(e, Literal(s), pos, height, colour);
 }
-
-//TODO: pass font in as a param, dont store in context?
-//or maybe we could do themeing in the context?  
 
 //---------------------------------------------------------------------
 
@@ -558,6 +553,7 @@ void uiTick(element *e) {
    UIContext *context = e->context;
    InputState *input = &context->input_state; 
 
+   //TODO: use cliprect instead of bounds
    if(context->debug_mode == UIDebugMode_ElementPick) {
       if(Contains(e->bounds, input->pos)) {
          context->debug_hot_e = e;
