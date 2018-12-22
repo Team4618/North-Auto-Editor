@@ -39,7 +39,7 @@ element *_VerticalList(ui_id id, element *parent, rect2 bounds) {
    layout_data->at.y = -data->scroll_offset;
    
    content->layout_data = (u8 *) layout_data;
-   content->layout_func = verticalListLayout;
+   content->layout_elem = verticalListLayout;
    
    rect2 scroll_column_rect = RectMinMax(V2(scroll->bounds.max.x - 20, scroll->bounds.min.y), 
                                          scroll->bounds.max);

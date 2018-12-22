@@ -88,7 +88,7 @@ void reloadFiles(EditorState *state) {
 }
 
 void DrawBlankView(element *page, EditorState *state) {
-   Panel(state->top_bar, V2(40, Size(state->top_bar).y));
+   Panel(state->top_bar, Size(40, Size(state->top_bar).y));
    if(Button(state->top_bar, "New", menu_button).clicked) {
       state->view = EditorView_NewFile;
    }
@@ -99,7 +99,7 @@ void DrawBlankView(element *page, EditorState *state) {
 }
 
 void DrawOpenFileView(element *page, EditorState *state) {
-   Panel(state->top_bar, V2(40, Size(state->top_bar).y));
+   Panel(state->top_bar, Size(40, Size(state->top_bar).y));
    if(Button(state->top_bar, "<- Back", menu_button).clicked) {
       state->view = EditorView_Blank;
    }
@@ -123,7 +123,7 @@ void DrawOpenFileView(element *page, EditorState *state) {
 }
 
 void DrawNewFileView(element *page, EditorState *state) {
-   Panel(state->top_bar, V2(40, Size(state->top_bar).y));
+   Panel(state->top_bar, Size(40, Size(state->top_bar).y));
    if(Button(state->top_bar, "<- Back", menu_button).clicked) {
       state->view = EditorView_Blank;
    }
@@ -401,45 +401,13 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
       selected_node->out_paths = new_out_paths;
    }
 
-#if 0
-   element *edit_panel = ColumnPanel(page, Width(Width(page) - 10).Padding(5, 5));
+   element *edit_panel = ColumnPanel(page, Width(Size(page).x - 10).Padding(5, 5));
    Background(edit_panel, dark_grey);
-   element *edit_buttons = RowPanel(edit_panel, Size(Width(edit_panel), page_tab_height));
-   element *path_list = ColumnPanel(edit_panel, Width(Width(edit_panel))); 
-   element *command_lists = RowPanel(edit_panel, Width(Width(edit_panel))); 
-   element *available_command_list = ColumnPanel(command_lists, Width(Width(command_lists) / 2));
-   element *command_list = ColumnPanel(command_lists, Width(Width(command_lists) / 2));
-#endif
-
-#if 1
-   //---------------annoying-layout-stuff-----------------
-   f32 path_list_height = 5 + (40 + 5) * selected_node->path_count;
-   f32 available_command_list_height = 0;
-   f32 command_list_height = 5;
-   
-   ForEachArray(i, subsystem, profile->subsystem_count, profile->subsystems, {
-      ForEachArray(j, command, subsystem->command_count, subsystem->commands, {
-         available_command_list_height += 40;
-      });
-   });
-
-   ForEachArray(i, command, selected_node->command_count, selected_node->commands, {
-      RobotProfileCommand *command_template = GetCommand(profile, command->subsystem_name, command->command_name);
-      Assert(command_template);
-      command_list_height += 100 + 20 * command_template->param_count + 5;    
-   });
-
-   f32 edit_panel_height = page_tab_height + path_list_height + Max(available_command_list_height, command_list_height);
-   //--------------------------------------------------
-
-   element *edit_panel = ColumnPanel(page, V2(Size(page).x - 10, edit_panel_height), Padding(5, 5));
-   Background(edit_panel, dark_grey);
-   element *edit_buttons = RowPanel(edit_panel, V2(Size(edit_panel).x, page_tab_height));
-   element *path_list = ColumnPanel(edit_panel, V2(Size(edit_panel).x, path_list_height)); 
-   element *command_lists = RowPanel(edit_panel, V2(Size(edit_panel).x, Max(available_command_list_height, command_list_height))); 
-   element *available_command_list = ColumnPanel(command_lists, V2(Size(command_lists).x / 2, available_command_list_height));
-   element *command_list = ColumnPanel(command_lists, V2(Size(command_lists).x / 2, command_list_height));
-#endif
+   element *edit_buttons = RowPanel(edit_panel, Size(Size(edit_panel).x, page_tab_height));
+   element *path_list = ColumnPanel(edit_panel, Width(Size(edit_panel).x)); 
+   element *command_lists = RowPanel(edit_panel, Width(Size(edit_panel).x)); 
+   element *available_command_list = ColumnPanel(command_lists, Width(Size(command_lists).x / 2));
+   element *command_list = ColumnPanel(command_lists, Width(Size(command_lists).x / 2));
 
    if(selected_node != state->project->starting_node) {
       if(Button(edit_buttons, "Delete", menu_button).clicked) {
@@ -472,7 +440,7 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
    ForEachArray(i, _curr_path, selected_node->path_count, selected_node->out_paths, {
       AutoPath *curr_path = *_curr_path;
       UI_SCOPE(path_list->context, curr_path);
-      element *path_panel = RowPanel(path_list, V2(Size(path_list).x - 10, 40), Padding(5, 5));
+      element *path_panel = RowPanel(path_list, Size(Size(path_list).x - 10, 40).Padding(5, 5));
       Outline(path_panel, light_grey);
 
       Label(path_panel, Concat(Literal("Path "), ToString(i)), 20, WHITE);
@@ -520,7 +488,7 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
       Assert(command_template);
       
       UI_SCOPE(command_list, command);
-      element *command_panel = ColumnPanel(command_list, V2(Size(command_list).x, (100 + 20 * command_template->param_count)), Padding(0, 5).Captures(INTERACTION_DRAG));
+      element *command_panel = ColumnPanel(command_list, Size(Size(command_list).x, (100 + 20 * command_template->param_count)).Padding(0, 5).Captures(INTERACTION_DRAG));
       if(IsActive(command_panel)) {
          Outline(command_panel, WHITE);
       } else if(IsHot(command_panel)) {
@@ -529,7 +497,7 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
          Outline(command_panel, light_grey);
       }
       
-      element *button_row = RowPanel(command_panel, V2(Size(command_panel).x, page_tab_height)); 
+      element *button_row = RowPanel(command_panel, Size(Size(command_panel).x, page_tab_height)); 
       if(Button(button_row, "Delete", menu_button).clicked) {
          remove_command = true;
          remove_index = i;
@@ -552,7 +520,7 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
          }
       }
 
-      element *conditional_row = RowPanel(command_panel, V2(Size(command_panel).x, 40));
+      element *conditional_row = RowPanel(command_panel, Size(Size(command_panel).x, 40));
       Label(conditional_row, "Conditional", 20, WHITE);
       CheckBox(conditional_row, &command->has_conditional, V2(15, 15));
       if(command->has_conditional) {
@@ -569,7 +537,7 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
          f32 *param_value = command->params + j;
          UI_SCOPE(command_panel->context, param_value);
          
-         element *param_row = RowPanel(command_panel, V2(Size(command_panel).x, 20)); 
+         element *param_row = RowPanel(command_panel, Size(Size(command_panel).x, 20)); 
          Label(param_row, command_template->params[j], 20, WHITE);
          TextBox(param_row, param_value, 20);
       }    
@@ -583,6 +551,8 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
       ArrayMove(AutoCommand, selected_node->commands, selected_node->command_count,
                   from_index, to_index);
    }
+
+   FinalizeLayout(edit_panel);
 }
 
 v2 GetGraphPoint(element *graph, AutonomousProgram_DataPoint *datapoint, AutoPath *path) {
@@ -617,11 +587,9 @@ void DrawSelectedPath(EditorState *state, ui_field_topdown *field, bool field_cl
    RobotProfile *profile = &state->profiles.current;
    InputState *input = &page->context->input_state;
 
-   f32 edit_panel_height = 500; //TODO: calculate this
-
-   element *edit_panel = ColumnPanel(page, V2(Size(page).x - 10, edit_panel_height), Padding(5, 5));
+   element *edit_panel = ColumnPanel(page, Width(Size(page).x - 10).Padding(5, 5));
    Background(edit_panel, dark_grey);
-   element *edit_buttons = RowPanel(edit_panel, V2(Size(edit_panel).x, page_tab_height));
+   element *edit_buttons = RowPanel(edit_panel, Size(Size(edit_panel).x, page_tab_height));
    if(Button(edit_buttons, "(E)dit Path", menu_button.IsSelected(state->path_edit == EditControlPoints)).clicked ||
       (input->key_char == 'e'))
    {
@@ -646,14 +614,8 @@ void DrawSelectedPath(EditorState *state, ui_field_topdown *field, bool field_cl
 
    Label(edit_panel, Concat(Literal("Path length: "), ToString(selected_path->length)), 20, WHITE);
 
-   element *graph = Panel(edit_panel, V2(Size(edit_panel).x - 10, 300), Padding(5, 5).Captures(INTERACTION_CLICK));
+   element *graph = Panel(edit_panel, Size(Size(edit_panel).x - 10, 300).Padding(5, 5).Captures(INTERACTION_CLICK));
    Outline(graph, light_grey);
-   
-   if(ContainsCursor(graph)) {
-      f32 cursor_d = selected_path->length * ((Cursor(graph) - graph->bounds.min).x / Size(graph).x);
-      Text(graph, Concat(Literal("Distance="), ToString(cursor_d)), graph->bounds.min, 20, WHITE);
-      Rectangle(field->e, RectCenterSize(GetPoint(field, GetAutoPathPoint(selected_path, cursor_d)), V2(5, 5)), BLACK);
-   }
 
    //TODO: clean up
    v2 last_point;
@@ -693,9 +655,9 @@ void DrawSelectedPath(EditorState *state, ui_field_topdown *field, bool field_cl
       Assert(command_template);
       
       UI_SCOPE(edit_panel, devent);
-      element *command_panel = ColumnPanel(edit_panel, V2(Size(edit_panel).x, 300), Padding(0, 5).Captures(INTERACTION_DRAG));
+      element *command_panel = ColumnPanel(edit_panel, Width(Size(edit_panel).x).Padding(0, 5).Captures(INTERACTION_DRAG));
       
-      element *button_row = RowPanel(command_panel, V2(Size(command_panel).x, page_tab_height)); 
+      element *button_row = RowPanel(command_panel, Size(Size(command_panel).x, page_tab_height)); 
       if(Button(button_row, "Delete", menu_button).clicked) {
          remove_devent = true;
          remove_devent_i = i;
@@ -707,7 +669,7 @@ void DrawSelectedPath(EditorState *state, ui_field_topdown *field, bool field_cl
          f32 *param_value = devent->params + j;
          UI_SCOPE(command_panel->context, param_value);
          
-         element *param_row = RowPanel(command_panel, V2(Size(command_panel).x, 20)); 
+         element *param_row = RowPanel(command_panel, Size(Size(command_panel).x, 20)); 
          Label(param_row, command_template->params[j], 20, WHITE);
          TextBox(param_row, param_value, 20);
       }
@@ -744,6 +706,15 @@ void DrawSelectedPath(EditorState *state, ui_field_topdown *field, bool field_cl
          }
       });
    });
+
+   FinalizeLayout(edit_panel);
+
+   //NOTE: this has to be after FinalizeLayout because graph->bounds isnt valid until after
+   if(ContainsCursor(graph)) {
+      f32 cursor_d = selected_path->length * ((Cursor(graph) - graph->bounds.min).x / Size(graph).x);
+      Text(graph, Concat(Literal("Distance="), ToString(cursor_d)), graph->bounds.min, 20, WHITE);
+      Rectangle(field->e, RectCenterSize(GetPoint(field, GetAutoPathPoint(selected_path, cursor_d)), V2(5, 5)), BLACK);
+   }
 
    switch(state->path_edit) {
       case EditControlPoints: {
@@ -808,7 +779,7 @@ void DrawSelectedPath(EditorState *state, ui_field_topdown *field, bool field_cl
 void DrawEditingView(element *page, EditorState *state) {
    Assert(state->project != NULL);
 
-   Panel(state->top_bar, V2(40, Size(state->top_bar).y));
+   Panel(state->top_bar, Size(40, Size(state->top_bar).y));
    
    ui_textbox project_name_box = TextBox(state->top_bar, &state->project_name_box, Size(state->top_bar).y);
    if(IsSelected(project_name_box.e))
@@ -816,7 +787,7 @@ void DrawEditingView(element *page, EditorState *state) {
    
    state->project->name = GetText(project_name_box);
 
-   Panel(state->top_bar, V2(40, Size(state->top_bar).y));
+   Panel(state->top_bar, Size(40, Size(state->top_bar).y));
    if(Button(state->top_bar, "Save", menu_button.IsEnabled(GetText(project_name_box).length > 0)).clicked) {
       WriteProject(state->project);
    }
@@ -828,7 +799,7 @@ void DrawEditingView(element *page, EditorState *state) {
    ui_field_topdown field = FieldTopdown(page, state->settings.field.image, state->settings.field.size, field_width);
    state->path_got_selected = false;
 
-   element *resize_divider = Panel(page, V2(Size(page).x - 10, 10), Padding(5, 5).Captures(INTERACTION_DRAG));
+   element *resize_divider = Panel(page, Size(Size(page).x - 10, 10).Padding(5, 5).Captures(INTERACTION_DRAG));
    Background(resize_divider, dark_grey);
    field_width += GetDrag(resize_divider).y * (field.size_in_ft.x / field.size_in_ft.y);
 
@@ -895,7 +866,7 @@ void DrawUI(element *root, EditorState *state) {
    Background(root, light_grey);
    Texture(root, logoTexture, RectCenterSize(Center(root->bounds), logoTexture.size));
 
-   element *status_bar = RowPanel(root, V2(Size(root).x, status_bar_height));
+   element *status_bar = RowPanel(root, Size(Size(root).x, status_bar_height));
    Background(status_bar, dark_grey);
    if(state->profiles.current.state == RobotProfileState::Connected) {
       Label(status_bar, Concat(state->profiles.current.name, Literal(" Connected")), 20, WHITE, V2(10, 0));
@@ -905,7 +876,7 @@ void DrawUI(element *root, EditorState *state) {
       Label(status_bar, "No Robot", 20, WHITE, V2(5, 0));
    }
    
-   state->top_bar = RowPanel(root, V2(Size(root).x, page_tab_height));
+   state->top_bar = RowPanel(root, Size(Size(root).x, page_tab_height));
    Background(state->top_bar, dark_grey);
    PageButton("Home", EditorPage_Home, state);
    PageButton("Robots", EditorPage_Robots, state);

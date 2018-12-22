@@ -2,7 +2,7 @@
 void _HorizontalSlider(ui_id id, element *parent, f32 *value, f32 min, f32 max,
                        v2 size, v2 p = V2(0, 0), v2 m = V2(0, 0))
 {
-   element *slider = _Panel(id + GEN_UI_ID, parent, size, Padding(p).Margin(m));
+   element *slider = _Panel(id + GEN_UI_ID, parent, Size(size).Padding(p).Margin(m));
    Background(slider, V4(0.7, 0.7, 0.7, 1));
    
    f32 handle_width = 10;

@@ -217,11 +217,11 @@ void RecalculateAutoPath(AutoPath *path) {
 
    path->len_root = last_layer;
 
-   Assert(path->velocity_datapoint_count > 2);
-   path->velocity_datapoints[path->velocity_datapoint_count - 1].distance = path->length;
-   for(u32 i = 0; i < path->velocity_datapoint_count; i++) {
-      path->velocity_datapoints[i].distance = Min(path->velocity_datapoints[i].distance, path->length);
-   }
+   // Assert(path->velocity_datapoint_count > 2);
+   // path->velocity_datapoints[path->velocity_datapoint_count - 1].distance = path->length;
+   // for(u32 i = 0; i < path->velocity_datapoint_count; i++) {
+   //    path->velocity_datapoints[i].distance = Min(path->velocity_datapoints[i].distance, path->length);
+   // }
 
    //TODO: calculate (time -> distance) map
 }

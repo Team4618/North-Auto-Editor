@@ -57,6 +57,8 @@ struct RenderCommand {
       struct {
          rect2 bounds;
          v4 colour;
+
+         bool background;
       } drawRectangle;
       
       struct {
@@ -65,6 +67,8 @@ struct RenderCommand {
          u32 point_count;
          v2 *points;
          bool closed;
+
+         bool outline;
       } drawLine;
    };
 };
@@ -197,7 +201,14 @@ struct UIContext {
    InputState input_state;
 };
 
-typedef rect2 (*layout_callback)(element *e, u8 *layout_data, v2 element_size, v2 padding_size, v2 margin_size);
+typedef void (*layout_calculate_size_callback)(element *e, u8 *layout_data);
+typedef rect2 (*layout_elem_callback)(element *e, u8 *layout_data, v2 element_size, v2 padding_size, v2 margin_size);
+
+enum layout_flags {
+   Layout_Width = (1 << 0),
+   Layout_Height = (1 << 1),
+   Layout_Placed = (1 << 2),
+};
 
 struct element {
    UIContext *context;
@@ -210,6 +221,9 @@ struct element {
    ui_id id;
    
    rect2 bounds;
+   v2 padding;
+   v2 margin;
+
    rect2 cliprect;
    RenderCommand *first_command;
    RenderCommand *curr_command;
@@ -217,7 +231,11 @@ struct element {
    u32 captures;
 
    u8 *layout_data;
-   layout_callback layout_func;
+   layout_calculate_size_callback calculate_size;
+   layout_elem_callback layout_elem;
+
+   u32 layout_flags;
+   bool layout_locked; //NOTE: this means theres a child element that isnt finalized yet
 };
 
 v2 Size(element *e) {
@@ -226,6 +244,12 @@ v2 Size(element *e) {
 
 v2 Center(element *e) {
    return Center(e->bounds);
+}
+
+bool IsFinalized(element *e) {
+   return (e->layout_flags & Layout_Width) &&
+          (e->layout_flags & Layout_Height) &&
+          (e->layout_flags & Layout_Placed);
 }
 
 //----------------------------------------------------
@@ -295,12 +319,14 @@ element *beginFrame(v2 window_size, UIContext *context, f32 dt) {
    context->overlay->bounds = RectMinSize(V2(0, 0), window_size);
    context->overlay->cliprect = RectMinSize(V2(0, 0), window_size);
    context->overlay->id.loc = "overlay";
+   context->overlay->layout_flags = Layout_Width | Layout_Height | Layout_Placed;
 
    element *root = PushStruct(&context->frame_arena, element);
    root->context = context;
    root->bounds = RectMinSize(V2(0, 0), window_size);
    root->cliprect = RectMinSize(V2(0, 0), window_size);
    root->id.loc = "root";
+   root->layout_flags = Layout_Width | Layout_Height | Layout_Placed;
    return root;
 }
 
@@ -334,7 +360,9 @@ RenderCommand *Rectangle(element *e, rect2 bounds, v4 colour) {
 }
 
 RenderCommand *Background(element *e, v4 colour) {
-   return Rectangle(e, e->bounds, colour);
+   RenderCommand *result = Rectangle(e, e->bounds, colour);
+   result->drawRectangle.background = true;
+   return result;
 }
 
 RenderCommand *_Line(element *e, v4 colour, f32 thickness, v2 *points, u32 point_count, bool closed = false) {
@@ -359,10 +387,12 @@ RenderCommand *_Line(element *e, v4 colour, f32 thickness, v2 *points, u32 point
 #define Loop(e, colour, thickness, ...) do {v2 __points[] = {__VA_ARGS__}; _Line(e, colour, thickness, __points, ArraySize(__points), true); } while(false)
 
 void Outline(element *e, rect2 b, v4 colour, f32 thickness = 2) {
-   //TODO: move the outline in by the thickness
-   Loop(e, colour, thickness, 
-        V2(b.min.x, b.min.y), V2(b.max.x, b.min.y), 
-        V2(b.max.x, b.max.y), V2(b.min.x, b.max.y));
+   v2 __points[] = {
+      V2(b.min.x, b.min.y), V2(b.max.x, b.min.y), 
+      V2(b.max.x, b.max.y), V2(b.min.x, b.max.y)
+   };
+   RenderCommand *result = _Line(e, colour, thickness, __points, ArraySize(__points), true); 
+   result->drawLine.outline = true;
 }
 
 void Outline(element *e, v4 colour, f32 thickness = 2) {
@@ -552,6 +582,7 @@ ui_dropped_files GetDroppedFiles(element *e) {
 void uiTick(element *e) {
    UIContext *context = e->context;
    InputState *input = &context->input_state; 
+   Assert(IsFinalized(e));
 
    //TODO: use cliprect instead of bounds
    if(context->debug_mode == UIDebugMode_ElementPick) {
@@ -621,50 +652,78 @@ void uiTick(element *e) {
 
 typedef void (*layout_setup_callback)(element *e);
 
-//NOTE: this is super stupid, but hey it works
 struct panel_args {
-   layout_setup_callback _layout_setup;
-   v2 _padding;
-   v2 _margin;
-   u32 _captures;
+   v2 size;
+   u32 layout_flags;
 
-   panel_args Layout(layout_setup_callback _layout_setup) {
+   layout_setup_callback layout_setup;
+   v2 padding;
+   v2 margin;
+   u32 captures;
+
+   panel_args Layout(layout_setup_callback layout_setup) {
       panel_args result = *this;
-      result._layout_setup = _layout_setup;
+      result.layout_setup = layout_setup;
       return result;
    }
 
-   panel_args Padding(v2 _padding) {
+   panel_args Padding(v2 padding) {
       panel_args result = *this;
-      result._padding = _padding;
+      result.padding = padding;
       return result;
    }
 
    panel_args Padding(f32 x, f32 y) {
       panel_args result = *this;
-      result._padding = V2(x, y);
+      result.padding = V2(x, y);
       return result;
    }
 
-   panel_args Margin(v2 _margin) {
+   panel_args Margin(v2 margin) {
       panel_args result = *this;
-      result._margin = _margin;
+      result.margin = margin;
       return result;
    }
 
    panel_args Margin(f32 x, f32 y) {
       panel_args result = *this;
-      result._margin = V2(x, y);
+      result.margin = V2(x, y);
       return result;
    }
 
-   panel_args Captures(u32 _captures) {
+   panel_args Captures(u32 captures) {
       panel_args result = *this;
-      result._captures |= _captures;
+      result.captures |= captures;
       return result;
    }
 };
 
+panel_args Size(v2 size) {
+   panel_args result = {};
+   result.size = size;
+   result.layout_flags |= (Layout_Width | Layout_Height);
+   return result;   
+}
+
+panel_args Size(f32 width, f32 height) {
+   return Size(V2(width, height));
+}
+
+panel_args Width(f32 width) {
+   panel_args result = {};
+   result.size = V2(width, 0);
+   result.layout_flags |= Layout_Width;
+   return result; 
+}
+
+panel_args Height(f32 height) {
+   panel_args result = {};
+   result.size = V2(0, height);
+   result.layout_flags |= Layout_Height;
+   return result;
+}
+
+//----------------------REMOVE----------------------
 panel_args Layout(layout_setup_callback _layout_setup) {
    panel_args result = {};
    return result.Layout(_layout_setup);
@@ -694,21 +753,17 @@ panel_args Captures(u32 _captures) {
    panel_args result = {};
    return result.Captures(_captures);
 }
+//---------------------------------------------------
 
-#define Panel(...) _Panel(GEN_UI_ID, __VA_ARGS__)
-element *_Panel(ui_id id, element *parent, rect2 bounds, panel_args args = {}) {
+element *addElement(ui_id id, element *parent, u32 captures) {
    UIContext *context = parent->context;
    element *e = PushStruct(&context->frame_arena, element);
    
    e->context = context;
    e->parent = parent;
    e->id = id + context->scope_id;
-   e->bounds = bounds;
-   e->cliprect = Overlap(parent->cliprect, bounds);
-   e->captures = args._captures;
-   if(args._layout_setup != NULL) {
-         args._layout_setup(e);
-   }
+   e->captures = captures;
+   e->layout_locked = false;
    
    if(parent->first_child == NULL) {
       parent->first_child = e;
@@ -717,73 +772,224 @@ element *_Panel(ui_id id, element *parent, rect2 bounds, panel_args args = {}) {
    }
    
    parent->curr_child = e;
-
    return e;
 }
 
-element *_Panel(ui_id id, element *parent, v2 size, panel_args args = {}) {
-   Assert(parent->layout_func != NULL);
-   rect2 bounds = parent->layout_func(parent, parent->layout_data, size, args._padding, args._margin);
-   return _Panel(id, parent, bounds, args);
+#define Panel(...) _Panel(GEN_UI_ID, __VA_ARGS__)
+element *_Panel(ui_id id, element *parent, rect2 bounds, panel_args args = {}) {
+   // Assert(IsFinalized(parent));
+   element *e = addElement(id, parent, args.captures);
+   
+   e->bounds = bounds;
+   e->cliprect = Overlap(parent->cliprect, bounds);
+   e->layout_flags = Layout_Width | Layout_Height | Layout_Placed;
+   if(args.layout_setup != NULL) {
+         args.layout_setup(e);
+   }
+   
+   return e;
+}
+
+// element *_Panel(ui_id id, element *parent, v2 size, panel_args args = {}) {
+//    Assert(parent->layout_func != NULL);
+//    rect2 bounds = parent->layout_func(parent, parent->layout_data, size, args._padding, args._margin);
+//    return _Panel(id, parent, bounds, args);
+// }
+
+element *_Panel(ui_id id, element *parent, panel_args args) {
+   Assert(parent->layout_elem != NULL);
+   Assert(!parent->layout_locked);
+
+   if((args.layout_flags & Layout_Width) &&
+      (args.layout_flags & Layout_Height) &&
+      IsFinalized(parent))
+   {
+      rect2 bounds = parent->layout_elem(parent, parent->layout_data, 
+                                         args.size, args.padding, args.margin);
+      element *e = _Panel(id, parent, bounds, args);
+      
+      e->padding = args.padding;
+      e->margin = args.margin;
+      return e;
+   } else {
+      element *e = addElement(id, parent, args.captures);
+   
+      e->bounds = RectMinSize(V2(0, 0), args.size);
+      e->layout_flags = args.layout_flags;
+      if(args.layout_setup != NULL) {
+            args.layout_setup(e);
+      }
+      
+      if(IsFinalized(parent)) {
+         parent->layout_locked = true;
+      }
+
+      e->padding = args.padding;
+      e->margin = args.margin;
+      return e;
+   }   
+}
+
+void CalculateSizes(element *e) {
+   for(element *child = e->first_child; child; child = child->next) {
+      if(!(child->layout_flags & Layout_Width) || 
+         !(child->layout_flags & Layout_Height)) 
+      {
+         CalculateSizes(child);
+      }
+   }
+
+   e->calculate_size(e, e->layout_data);
+}
+
+void LayoutChildren(element *e) {
+   if(IsFinalized(e)) {
+      e->bounds = e->parent->bounds.min + e->bounds;
+   } else {
+      e->bounds = e->parent->layout_elem(e->parent, e->parent->layout_data, Size(e), e->padding, e->margin);
+      e->layout_flags |= Layout_Placed;
+   }
+
+   e->cliprect = Overlap(e->parent->cliprect, e->bounds);
+   
+   for(RenderCommand *command = e->first_command; command; command = command->next) {
+      switch(command->type) {
+         case RenderCommand_Texture: {
+            command->drawTexture.bounds = e->bounds.min + command->drawTexture.bounds;
+         } break;
+         
+         case RenderCommand_Rectangle: {
+            command->drawRectangle.bounds = command->drawRectangle.background ? e->bounds : (e->bounds.min + command->drawRectangle.bounds);
+         } break;
+         
+         case RenderCommand_Line: {
+            if(command->drawLine.outline) {
+               v2 points[] = {
+                  V2(e->bounds.min.x, e->bounds.min.y), V2(e->bounds.max.x, e->bounds.min.y), 
+                  V2(e->bounds.max.x, e->bounds.max.y), V2(e->bounds.min.x, e->bounds.max.y)
+               };
+
+               Copy(points, sizeof(points), command->drawLine.points);
+            } else {
+               for(u32 i = 0; i < command->drawLine.point_count; i++) {
+                  command->drawLine.points[i] = command->drawLine.points[i] + e->bounds.min;
+               }
+            }
+         } break;
+      }
+   }
+
+   for(element *child = e->first_child; child; child = child->next) {
+      LayoutChildren(child);
+   }
+}
+
+void FinalizeLayout(element *e) {
+   e->parent->layout_locked = false;
+   CalculateSizes(e);
+   LayoutChildren(e);
 }
 
 //Common layout types-----------------------------------
 //TODO: make all the layouts work properly
-rect2 columnLayout(element *e, u8 *layout_data, v2 element_size, v2 padding_size, v2 margin_size) {
+rect2 column_layout_elem(element *e, u8 *layout_data, v2 element_size, v2 padding_size, v2 margin_size) {
    v2 *at = (v2 *) layout_data;
    v2 pos = *at;
    at->y += element_size.y + padding_size.y + margin_size.y;
    return RectMinSize(e->bounds.min + pos + padding_size, element_size);
 }
 
+void column_calculate_size(element *e, u8 *layout_data) {
+   if(e->layout_flags & Layout_Width) {
+      f32 height = 0;
+      for(element *child = e->first_child; child; child = child->next) {
+         height += Size(child).y + child->padding.y + child->margin.y;
+      }
+      e->bounds = RectMinSize(e->bounds.min, V2(Size(e).x, height));
+      e->layout_flags |= Layout_Height;
+   } else if(e->layout_flags & Layout_Height) {
+      f32 width = 0;
+      for(element *child = e->first_child; child; child = child->next) {
+         width = Max(width, Size(child).x);
+      }
+      e->bounds = RectMinSize(e->bounds.min, V2(width, Size(e).y));
+      e->layout_flags |= Layout_Width;
+   } else {
+      Assert(false);
+   }
+}
+
 void ColumnLayout(element *e) {
    UIContext *context = e->context;
-   e->layout_func = columnLayout;
+   e->layout_elem = column_layout_elem;
+   e->calculate_size = column_calculate_size;
    e->layout_data = (u8 *) PushStruct(&context->frame_arena, v2);
 }
 
 #define ColumnPanel(...) _ColumnPanel(GEN_UI_ID, __VA_ARGS__)
-element *_ColumnPanel(ui_id id, element *parent, v2 size, panel_args args = {}) {
-   return _Panel(id, parent, size, args.Layout(ColumnLayout));
+element *_ColumnPanel(ui_id id, element *parent, panel_args args) {
+   return _Panel(id, parent, args.Layout(ColumnLayout));
 }  
 
 element *_ColumnPanel(ui_id id, element *parent, rect2 bounds, panel_args args = {}) {
    return _Panel(id, parent, bounds, args.Layout(ColumnLayout));
 }
 
-rect2 rowLayout(element *e, u8 *layout_data, v2 element_size, v2 padding_size, v2 margin_size) {
+rect2 row_layout_elem(element *e, u8 *layout_data, v2 element_size, v2 padding_size, v2 margin_size) {
    v2 *at = (v2 *) layout_data;
    v2 pos = *at;
    at->x += element_size.x + padding_size.x + margin_size.x;
    return RectMinSize(e->bounds.min + pos + padding_size, element_size);
 }
 
+void row_calculate_size(element *e, u8 *layout_data) {
+   if(e->layout_flags & Layout_Width) {
+      f32 height = 0;
+      for(element *child = e->first_child; child; child = child->next) {
+         height = Max(height, Size(child).y);
+      }
+      e->bounds = RectMinSize(e->bounds.min, V2(Size(e).x, height));
+      e->layout_flags |= Layout_Height;
+   } else if(e->layout_flags & Layout_Height) {
+      f32 width = 0;
+      for(element *child = e->first_child; child; child = child->next) {
+         width += Size(child).x + child->padding.x + child->margin.x;
+      }
+      e->bounds = RectMinSize(e->bounds.min, V2(width, Size(e).y));
+      e->layout_flags |= Layout_Width;
+   } else {
+      Assert(false);
+   }
+}
+
 void RowLayout(element *e) {
    UIContext *context = e->context;
-   e->layout_func = rowLayout;
+   e->layout_elem = row_layout_elem;
+   e->calculate_size = row_calculate_size;
    e->layout_data = (u8 *) PushStruct(&context->frame_arena, v2);
 }
 
 #define RowPanel(...) _RowPanel(GEN_UI_ID, __VA_ARGS__)
-element *_RowPanel(ui_id id, element *parent, v2 size, panel_args args = {}) {
-   return _Panel(id, parent, size, args.Layout(RowLayout));
+element *_RowPanel(ui_id id, element *parent, panel_args args) {
+   return _Panel(id, parent, args.Layout(RowLayout));
 }  
 
 element *_RowPanel(ui_id id, element *parent, rect2 bounds, panel_args args = {}) {
    return _Panel(id, parent, bounds, args.Layout(RowLayout));
 }
 
-rect2 stackLayout(element *e, u8 *layout_data, v2 element_size, v2 padding_size, v2 margin_size) {
+rect2 stack_layout_elem(element *e, u8 *layout_data, v2 element_size, v2 padding_size, v2 margin_size) {
    return RectMinSize(e->bounds.min + padding_size + margin_size, element_size);
 }
 
 void StackLayout(element *e) {
-   e->layout_func = stackLayout;
+   e->layout_elem = stack_layout_elem;
+   // e->calculate_size
 }
 
 #define StackPanel(...) _StackPanel(GEN_UI_ID, __VA_ARGS__)
-element *_StackPanel(ui_id id, element *parent, v2 size, panel_args args = {}) {
-   return _Panel(id, parent, size, args.Layout(StackLayout));
+element *_StackPanel(ui_id id, element *parent, panel_args args) {
+   return _Panel(id, parent, args.Layout(StackLayout));
 }  
 
 element *_StackPanel(ui_id id, element *parent, rect2 bounds, panel_args args = {}) {
@@ -801,7 +1007,7 @@ element *_Label(ui_id id, element *parent, string text, f32 line_height, v4 text
    UIContext *context = parent->context;
    f32 width = TextWidth(context, text, line_height);
 
-   element *result = _Panel(id, parent, V2(width, line_height), Padding(p).Margin(m));
+   element *result = _Panel(id, parent, Size(width, line_height).Padding(p).Margin(m));
    Text(result, text, result->bounds.min, line_height, text_colour);
    return result;
 }
@@ -816,7 +1022,7 @@ element *_Label(ui_id id, element *parent, string text, v2 size, f32 line_height
    UIContext *context = parent->context;
    ui_text_layout layed_out_text = LayoutText(context, text, line_height);
    
-   element *result = _Panel(id, parent, size);
+   element *result = _Panel(id, parent, Size(size));
    Text(result, layed_out_text, Center(result) - 0.5 * Size(layed_out_text.text_bounds), text_colour);
    return result;
 }

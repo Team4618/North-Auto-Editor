@@ -178,7 +178,7 @@ void WriteNewFieldFile(string name, f32 width, f32 height, string img_file_name)
 
 #define SettingsRow(...) _SettingsRow(GEN_UI_ID, __VA_ARGS__)
 ui_numberbox _SettingsRow(ui_id id, element *page, char *label, u32 *num, char *suffix = "") {
-   element *row = RowPanel(page, V2(Size(page).x, 20), Margin(0, 5));
+   element *row = RowPanel(page, Size(Size(page).x, 20).Margin(0, 5));
    Label(row, label, 20, BLACK);
    ui_numberbox result = _TextBox(id, row, num, 20);
    Label(row, suffix, 20, BLACK);
@@ -186,7 +186,7 @@ ui_numberbox _SettingsRow(ui_id id, element *page, char *label, u32 *num, char *
 }
 
 ui_numberbox _SettingsRow(ui_id id, element *page, char *label, f32 *num, char *suffix = "") {
-   element *row = Panel(page, V2(Size(page).x, 20), Layout(RowLayout).Margin(0, 5));
+   element *row = RowPanel(page, Size(Size(page).x, 20).Margin(0, 5));
    Label(row, label, 20, BLACK);
    ui_numberbox result = _TextBox(id, row, num, 20);
    Label(row, suffix, 20, BLACK);
@@ -194,7 +194,7 @@ ui_numberbox _SettingsRow(ui_id id, element *page, char *label, f32 *num, char *
 }
 
 ui_textbox _SettingsRow(ui_id id, element *page, char *label, TextBoxData *text, char *suffix = "") {
-   element *row = Panel(page, V2(Size(page).x, 20), Layout(RowLayout).Margin(0, 5));
+   element *row = RowPanel(page, Size(Size(page).x, 20).Margin(0, 5));
    Label(row, label, 20, BLACK);
    ui_textbox result = _TextBox(id, row, text, 20);
    if(IsSelected(result.e))
@@ -206,7 +206,7 @@ ui_textbox _SettingsRow(ui_id id, element *page, char *label, TextBoxData *text,
 ui_checkbox _SettingsRow(ui_id id, element *page, char *label, u32 *value, u32 flag, 
                          v2 size, v2 padding = V2(0, 0), v2 margin = V2(0, 0))
 {
-   element *row = Panel(page, V2(Size(page).x, 20), Layout(RowLayout).Margin(0, 5));
+   element *row = RowPanel(page, Size(Size(page).x, 20).Margin(0, 5));
    Label(row, label, 20, BLACK);
    ui_checkbox result = _CheckBox(id, row, value, flag, size, padding, margin);
    return result;
@@ -225,7 +225,7 @@ void DrawSettings(element *full_page, NorthSettings *state,
    StackLayout(full_page);
    element *page = VerticalList(full_page);
    
-   element *top_panel = RowPanel(page, V2(Size(page).x - 10, 40), Padding(5, 5));
+   element *top_panel = RowPanel(page, Size(Size(page).x - 10, 40).Padding(5, 5));
    Background(top_panel, dark_grey);
 
    static SettingsPage curr_page = SettingsPage_Main;
@@ -288,7 +288,7 @@ void DrawSettings(element *full_page, NorthSettings *state,
             starting_pos->pos = ClampTo(starting_pos->pos + PixelsToFeet(&field, GetDrag(field_starting_pos)), 
                                        RectCenterSize(V2(0, 0), field.size_in_ft));
             
-            element *starting_pos_panel = Panel(page, V2(Size(page).x, 40), Layout(RowLayout).Margin(0, 5));
+            element *starting_pos_panel = RowPanel(page, Size(Size(page).x, 40).Margin(0, 5));
             Background(starting_pos_panel, BLUE); 
 
             Label(starting_pos_panel, "X: ", 20, BLACK);
@@ -312,7 +312,7 @@ void DrawSettings(element *full_page, NorthSettings *state,
          }
 
          if((state->field.starting_position_count + 1) < ArraySize(state->field.starting_positions)) {
-            element *add_starting_pos = RowPanel(page, V2(Size(page->bounds).x, 40), Margin(0, 5).Captures(INTERACTION_CLICK));
+            element *add_starting_pos = RowPanel(page, Size(Size(page->bounds).x, 40).Margin(0, 5).Captures(INTERACTION_CLICK));
             Background(add_starting_pos, RED);
             if(WasClicked(add_starting_pos)) {
                state->field.starting_position_count++;
@@ -333,7 +333,7 @@ void DrawSettings(element *full_page, NorthSettings *state,
       
       for(FileListLink *file = ncff_files; file; file = file->next) {
          UI_SCOPE(page->context, file);
-         element *field_panel = RowPanel(page, V2(Size(page).x - 5, 60), Padding(5, 5));
+         element *field_panel = RowPanel(page, Size(Size(page).x - 5, 60).Padding(5, 5));
          Background(field_panel, light_grey);
 
          if(Button(field_panel, file->name, menu_button).clicked) {
@@ -366,7 +366,7 @@ void DrawSettings(element *full_page, NorthSettings *state,
          curr_page = SettingsPage_Main;
       }
 
-      element *image_drop = Panel(page, V2(400, 400), Layout(ColumnLayout).Captures(INTERACTION_FILEDROP));
+      element *image_drop = Panel(page, Size(400, 400).Layout(ColumnLayout).Captures(INTERACTION_FILEDROP));
       Background(image_drop, dark_grey);
       ui_dropped_files dropped_files = GetDroppedFiles(image_drop);
       

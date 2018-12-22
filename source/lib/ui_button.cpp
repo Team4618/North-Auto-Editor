@@ -76,7 +76,7 @@ ui_button _Button(ui_id id, element *parent, string text, button_style style) {
    UIContext *context = parent->context;
    InputState input = context->input_state;
    f32 width = TextWidth(context, text, style.height);
-   element *e = _Panel(id, parent, V2(width, style.height), Padding(style.padding).Margin(style.margin).Captures(INTERACTION_CLICK));
+   element *e = _Panel(id, parent, Size(width, style.height).Padding(style.padding).Margin(style.margin).Captures(INTERACTION_CLICK));
    bool disabled = style.flags & BUTTON_DISABLED;
 
    if(disabled) {

@@ -10,7 +10,7 @@ ui_field_topdown _FieldTopdown(ui_id id, element *parent, texture background_ima
                    v2 size_in_ft, f32 width) {
    v2 size = V2(width, size_in_ft.y  * (width / size_in_ft.x));
    f32 x_padding = (Size(parent->bounds).x - size.x) / 2;
-   element *e = _Panel(id, parent, size, Padding(x_padding, 0).Captures(INTERACTION_CLICK));
+   element *e = _Panel(id, parent, Size(size).Padding(x_padding, 0).Captures(INTERACTION_CLICK));
    Texture(e, background_image, e->bounds);
 
    ui_field_topdown result = {};

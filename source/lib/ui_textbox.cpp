@@ -20,7 +20,7 @@ struct ui_textbox {
 #define TextBox(...) _TextBox(GEN_UI_ID, __VA_ARGS__)
 ui_textbox _TextBox(ui_id id, element *parent, TextBoxData *data, f32 line_height) {
    UIContext *context = parent->context;
-   element *e = _Panel(id, parent, V2(/*GetMaxCharWidth(font, line_height)*/ 15 * data->size, line_height), Captures(INTERACTION_SELECT));
+   element *e = _Panel(id, parent, Size(/*GetMaxCharWidth(font, line_height)*/ 15 * data->size, line_height).Captures(INTERACTION_SELECT));
 
    string drawn_text = { data->text, data->used };
    Background(e, V4(0.7, 0.7, 0.7, 1));

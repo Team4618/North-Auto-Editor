@@ -326,7 +326,7 @@ void DrawProfiles(element *full_page, RobotProfiles *profiles, FileListLink *ncr
    StackLayout(full_page);
    element *page = VerticalList(full_page);
    
-   element *top_bar = RowPanel(page, V2(Size(page).x - 10, page_tab_height), Padding(5, 5));
+   element *top_bar = RowPanel(page, Size(Size(page).x - 10, page_tab_height).Padding(5, 5));
    Background(top_bar, dark_grey);
 
    static bool selector_open = false;
@@ -341,7 +341,7 @@ void DrawProfiles(element *full_page, RobotProfiles *profiles, FileListLink *ncr
             profiles->selected = &profiles->current;
          }
 
-         element *divider = Panel(page, V2(Size(page->bounds).x - 40, 5), Padding(10, 0));
+         element *divider = Panel(page, Size(Size(page->bounds).x - 40, 5).Padding(10, 0));
          Background(divider, BLACK);
       }
 
@@ -374,7 +374,7 @@ void DrawProfiles(element *full_page, RobotProfiles *profiles, FileListLink *ncr
 
          for(u32 i = 0; i < profile->subsystem_count; i++) {
             RobotProfileSubsystem *subsystem = profile->subsystems + i;
-            element *subsystem_page = Panel(page, V2(Size(page).x - 60, 400), Padding(20, 0).Layout(ColumnLayout));
+            element *subsystem_page = ColumnPanel(page, Size(Size(page).x - 60, 400).Padding(20, 0));
             Background(subsystem_page, V4(0.5, 0.5, 0.5, 0.5));
 
             Label(subsystem_page, subsystem->name, 20, BLACK);

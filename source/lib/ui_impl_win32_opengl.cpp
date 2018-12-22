@@ -833,6 +833,7 @@ void endFrame(ui_impl_win32_window *window, element *root) {
    debug_root->context = context;
    debug_root->bounds = RectMinSize(V2(0, 0), window->size);
    debug_root->cliprect = RectMinSize(V2(0, 0), window->size);
+   debug_root->layout_flags = Layout_Width | Layout_Height | Layout_Placed;
    ColumnLayout(debug_root);
 
    button_style menu_button = ButtonStyle(
@@ -845,7 +846,13 @@ void endFrame(ui_impl_win32_window *window, element *root) {
       case UIDebugMode_ElementPick: {
          if(context->debug_hot_e != NULL) {
             string hot_e_loc = Literal(context->debug_hot_e->id.loc);
-            Outline(debug_root, context->debug_hot_e->bounds, BLACK, 2);
+            rect2 bounds = context->debug_hot_e->bounds;
+            v2 padding = context->debug_hot_e->padding;
+            v2 margin = context->debug_hot_e->margin;
+
+            Outline(debug_root, bounds, BLACK, 2);
+            Outline(debug_root, RectMinMax(bounds.min - padding, bounds.max + padding), BLACK, 2);
+            Outline(debug_root, RectMinMax(bounds.min - padding - margin, bounds.max + padding + margin), BLACK, 2);
 
             if(input->left_up) {
                context->debug_selected = context->debug_hot_e->id;

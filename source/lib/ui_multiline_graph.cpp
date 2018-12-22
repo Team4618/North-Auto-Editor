@@ -164,9 +164,9 @@ void _MultiLineGraph(ui_id id, element *parent, MultiLineGraphData *data,
                      v2 size, v2 padding = V2(0, 0), v2 margin = V2(0, 0),
                      bool immutable = false)
 {
-   element *base = _Panel(id + GEN_UI_ID, parent, size, Padding(padding).Margin(margin).Layout(ColumnLayout));
-   element *graph = _Panel(id + GEN_UI_ID, base, V2(size.x, size.y - 40), Layout(ColumnLayout).Captures(INTERACTION_CLICK));
-   element *control_row = _Panel(id + GEN_UI_ID, base, V2(size.x, 40), Padding(0, 5).Layout(RowLayout));
+   element *base = _Panel(id + GEN_UI_ID, parent, Size(size).Padding(padding).Margin(margin).Layout(ColumnLayout));
+   element *graph = _Panel(id + GEN_UI_ID, base, Size(size.x, size.y - 40).Layout(ColumnLayout).Captures(INTERACTION_CLICK));
+   element *control_row = _Panel(id + GEN_UI_ID, base, Size(size.x, 40).Padding(0, 5).Layout(RowLayout));
    
    Background(graph, V4(0.7, 0.7, 0.7, 1));
 
