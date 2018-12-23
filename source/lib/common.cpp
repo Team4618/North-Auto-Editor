@@ -440,6 +440,13 @@ v4 operator* (f32 s, v4 v) {
    return output;
 }
 
+v4 lerp(v4 a, f32 t, v4 b) {
+   return V4(lerp(a.r, t, b.r),
+             lerp(a.g, t, b.g),
+             lerp(a.b, t, b.b), 
+             lerp(a.a, t, b.a));
+}
+
 union v2 {
    struct { f32 u, v; };
    struct { f32 x, y; };

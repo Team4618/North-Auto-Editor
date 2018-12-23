@@ -62,32 +62,32 @@ struct AutoPath_LenBranch {
    };
 };
 
-// struct AutoPath_TimeLeaf {
-//    f32 time;
-//    f32 len;
-// };
+struct AutoPath_TimeLeaf {
+   f32 time;
+   f32 len;
+};
 
-// struct AutoPath_TimeBranch {
-//    f32 time;
+struct AutoPath_TimeBranch {
+   f32 time;
 
-//    union {
-//       struct {
-//          AutoPath_TimeLeaf *greater_leaf;
-//          AutoPath_TimeLeaf *less_leaf;
-//       };
+   union {
+      struct {
+         AutoPath_TimeLeaf *greater_leaf;
+         AutoPath_TimeLeaf *less_leaf;
+      };
 
-//       struct {
-//          AutoPath_TimeBranch *greater_branch;
-//          AutoPath_TimeBranch *less_branch;
-//       };
-//    };
-// };
+      struct {
+         AutoPath_TimeBranch *greater_branch;
+         AutoPath_TimeBranch *less_branch;
+      };
+   };
+};
 
-//NOTE: this means we have 2^length_to_pos_sample_exp samples
-const u32 length_to_pos_sample_exp = 7;
-u64 GetLenToPosMemorySize() {
-   u64 result = Power(2, length_to_pos_sample_exp) * sizeof(AutoPath_LenLeaf);
-   for(u32 i = 0; i < length_to_pos_sample_exp; i++) {
+//NOTE: this means we have 2^sample_exp samples
+const u32 sample_exp = 7;
+u64 GetMapMemorySize() {
+   u64 result = Power(2, sample_exp) * sizeof(AutoPath_LenLeaf);
+   for(u32 i = 0; i < sample_exp; i++) {
       result += Power(2, i) * sizeof(AutoPath_LenBranch);
    }
    return result;
@@ -121,6 +121,10 @@ struct AutoPath {
    MemoryArena length_to_pos_memory;
    f32 length;
    AutoPath_LenBranch *len_root;
+
+   MemoryArena time_to_length_memory;
+   f32 time;
+   AutoPath_TimeBranch *time_root;
 };
 
 struct AutoProjectLink {
@@ -160,11 +164,11 @@ v2 CubicHermiteSplineTangent(AutonomousProgram_ControlPoint a, AutonomousProgram
    return CubicHermiteSplineTangent(a.pos, a.tangent, b.pos, b.tangent, t);
 }
 
-void RecalculateAutoPath(AutoPath *path) {
+void RecalculateAutoPathLength(AutoPath *path) {
    MemoryArena *arena = &path->length_to_pos_memory;
    Reset(arena);
 
-   u32 sample_count = Power(2, length_to_pos_sample_exp); 
+   u32 sample_count = Power(2, sample_exp); 
    AutoPath_LenLeaf *samples = PushArray(arena, AutoPath_LenLeaf, sample_count);
    AutoPathSpline spline = GetAutoPathSpline(path);
    f32 step = (f32)(spline.point_count - 1) / (f32)sample_count;
@@ -187,7 +191,7 @@ void RecalculateAutoPath(AutoPath *path) {
    }
    path->length = length;
 
-   u32 last_layer_count = Power(2, length_to_pos_sample_exp - 1);
+   u32 last_layer_count = Power(2, sample_exp - 1);
    AutoPath_LenBranch *last_layer = PushArray(arena, AutoPath_LenBranch, last_layer_count);
    for(u32 i = 0; i < last_layer_count; i++) {
       AutoPath_LenLeaf *less = samples + (2 * i);
@@ -198,8 +202,8 @@ void RecalculateAutoPath(AutoPath *path) {
       last_layer[i].len = (less->len + greater->len) / 2;
    }
 
-   for(u32 i = 1; i < length_to_pos_sample_exp; i++) {
-      u32 layer_count = Power(2, length_to_pos_sample_exp - i - 1);
+   for(u32 i = 1; i < sample_exp; i++) {
+      u32 layer_count = Power(2, sample_exp - i - 1);
       AutoPath_LenBranch *curr_layer = PushArray(arena, AutoPath_LenBranch, layer_count);
 
       for(u32 i = 0; i < layer_count; i++) {
@@ -216,23 +220,101 @@ void RecalculateAutoPath(AutoPath *path) {
    }
 
    path->len_root = last_layer;
+}
 
-   // Assert(path->velocity_datapoint_count > 2);
-   // path->velocity_datapoints[path->velocity_datapoint_count - 1].distance = path->length;
-   // for(u32 i = 0; i < path->velocity_datapoint_count; i++) {
-   //    path->velocity_datapoints[i].distance = Min(path->velocity_datapoints[i].distance, path->length);
-   // }
+f32 GetVelocityAt(AutoPath *path, f32 distance) {
+   for(u32 i = 1; i < path->velocity_datapoint_count; i++) {
+      AutonomousProgram_DataPoint a = path->velocity_datapoints[i - 1];
+      AutonomousProgram_DataPoint b = path->velocity_datapoints[i];
+      if((a.distance <= distance) && (distance <= b.distance)) {
+         f32 t = (distance - a.distance) / (b.distance - a.distance);
+         return lerp(a.value, t, b.value);
+      }
+   }
 
-   //TODO: calculate (time -> distance) map
+   return 0;
+}
+
+void RecalculateAutoPathTime(AutoPath *path) {
+   Assert(path->velocity_datapoint_count > 2);
+   path->velocity_datapoints[0].distance = 0;
+   path->velocity_datapoints[path->velocity_datapoint_count - 1].distance = path->length;
+   for(u32 i = 0; i < path->velocity_datapoint_count; i++) {
+      path->velocity_datapoints[i].distance = Min(path->velocity_datapoints[i].distance, path->length);
+   }
+
+   MemoryArena *arena = &path->time_to_length_memory;
+   Reset(arena);
+
+   u32 sample_count = Power(2, sample_exp); 
+   AutoPath_TimeLeaf *samples = PushArray(arena, AutoPath_TimeLeaf, sample_count);
+   f32 ds = path->length / (f32)sample_count;
+
+   f32 time = 0;
+   for(u32 i = 1; i < (sample_count - 1); i++) {
+      time += (1 / GetVelocityAt(path, ds * i)) * ds;
+
+      samples[i].time = time;
+      samples[i].len = ds * i;
+   }
+   path->time = time;
+
+   //TODO: last sample is incorrect
+   samples[sample_count - 1].time = samples[sample_count - 2].time;
+   samples[sample_count - 1].len = path->length;;
+   
+   u32 last_layer_count = Power(2, sample_exp - 1);
+   AutoPath_TimeBranch *last_layer = PushArray(arena, AutoPath_TimeBranch, last_layer_count);
+   for(u32 i = 0; i < last_layer_count; i++) {
+      AutoPath_TimeLeaf *less = samples + (2 * i);
+      AutoPath_TimeLeaf *greater = samples + (2 * i + 1);
+
+      last_layer[i].less_leaf = less;
+      last_layer[i].greater_leaf = greater;
+      last_layer[i].time = (less->time + greater->time) / 2;
+   }
+
+   for(u32 i = 1; i < sample_exp; i++) {
+      u32 layer_count = Power(2, sample_exp - i - 1);
+      AutoPath_TimeBranch *curr_layer = PushArray(arena, AutoPath_TimeBranch, layer_count);
+
+      for(u32 i = 0; i < layer_count; i++) {
+         AutoPath_TimeBranch *less = last_layer + (2 * i);
+         AutoPath_TimeBranch *greater = last_layer + (2 * i + 1);
+
+         curr_layer[i].less_branch = less;
+         curr_layer[i].greater_branch = greater;
+         curr_layer[i].time = (less->time + greater->time) / 2;
+      }
+
+      last_layer_count = layer_count;
+      last_layer = curr_layer;
+   }
+
+   path->time_root = last_layer;
+}
+
+void RecalculateAutoPath(AutoPath *path) {
+   RecalculateAutoPathLength(path);
+   RecalculateAutoPathTime(path);
 }
 
 v2 GetAutoPathPoint(AutoPath *path, f32 distance) {
    AutoPath_LenBranch *branch = path->len_root;
-   for(u32 i = 0; i < (length_to_pos_sample_exp - 1); i++) {
+   for(u32 i = 0; i < (sample_exp - 1); i++) {
       branch = (distance > branch->len) ? branch->greater_branch : branch->less_branch;
    }
    f32 t = (distance - branch->less_leaf->len) / (branch->greater_leaf->len - branch->less_leaf->len); 
    return lerp(branch->less_leaf->pos, t, branch->greater_leaf->pos);
+}
+
+f32 GetAutoPathDistForTime(AutoPath *path, f32 time) {
+   AutoPath_TimeBranch *branch = path->time_root;
+   for(u32 i = 0; i < (sample_exp - 1); i++) {
+      branch = (time > branch->time) ? branch->greater_branch : branch->less_branch;
+   }
+   f32 t = (time - branch->less_leaf->time) / (branch->greater_leaf->time - branch->less_leaf->time); 
+   return lerp(branch->less_leaf->len, t, branch->greater_leaf->len);
 }
 
 AutoCommand CreateCommand(MemoryArena *arena, string subsystem_name, string command_name,
@@ -337,7 +419,8 @@ AutoPath *ParseAutoPath(buffer *file, MemoryArena *arena) {
       event->distance = file_event->distance;
    }
 
-   path->length_to_pos_memory = PlatformAllocArena(GetLenToPosMemorySize());
+   path->length_to_pos_memory = PlatformAllocArena(GetMapMemorySize());
+   path->time_to_length_memory = PlatformAllocArena(GetMapMemorySize());
 
    path->out_node = ParseAutoNode(file, arena);
    path->out_node->in_path = path;

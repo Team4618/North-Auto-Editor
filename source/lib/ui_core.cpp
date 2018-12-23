@@ -584,15 +584,14 @@ void uiTick(element *e) {
    InputState *input = &context->input_state; 
    Assert(IsFinalized(e));
 
-   //TODO: use cliprect instead of bounds
    if(context->debug_mode == UIDebugMode_ElementPick) {
-      if(Contains(e->bounds, input->pos)) {
+      if(Contains(e->cliprect, input->pos)) {
          context->debug_hot_e = e;
       }
    } else {
       if(e->captures & INTERACTION_HOT) {
          bool can_become_hot = (context->active_e == NULL_UI_ID) || (context->active_e == e->id);
-         if(Contains(e->bounds, input->pos) && can_become_hot) {
+         if(Contains(e->cliprect, input->pos) && can_become_hot) {
             context->new_hot_e = e->id;
          }
       }
