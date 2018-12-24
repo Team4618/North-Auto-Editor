@@ -121,13 +121,13 @@ void _ArrayMove(u32 size, u8 *array, u32 count, u32 from, u32 to) {
 
 //--------------------Kinda-specific-utils-----------------------
 //TODO: debug this, its pretty janky with curved lines right now
-f32 MinDistFrom(ui_field_topdown *field, AutonomousProgram_ControlPoint *control_points, u32 control_point_count) {
+f32 MinDistFrom(ui_field_topdown *field, North_HermiteControlPoint *control_points, u32 control_point_count) {
    v2 p = Cursor(field->e);
    f32 result = F32_MAX;
 
    for(u32 i = 1; i < control_point_count; i++) {
-      AutonomousProgram_ControlPoint cpa = control_points[i - 1];
-      AutonomousProgram_ControlPoint cpb = control_points[i];
+      North_HermiteControlPoint cpa = control_points[i - 1];
+      North_HermiteControlPoint cpb = control_points[i];
       
       u32 point_count = 20;
       f32 step = (f32)1 / (f32)(point_count - 1);
@@ -140,10 +140,6 @@ f32 MinDistFrom(ui_field_topdown *field, AutonomousProgram_ControlPoint *control
    }
 
    return result;
-}
-
-string GetName(AutoCommand *command) {
-   return Concat(command->subsystem_name, Literal(":"), command->command_name);
 }
 //---------------------------------------------------------------
 
@@ -316,7 +312,7 @@ void DrawPath(ui_field_topdown *field, EditorState *state, AutoPath *path) {
       u32 point_index = 0;
       
       for(u32 i = 0; i < path->control_point_count; i++) {
-         AutonomousProgram_ControlPoint *point = path->control_points + i;
+         North_HermiteControlPoint *point = path->control_points + i;
          UI_SCOPE(field->e->context, point);
          element *handle = Panel(field->e, RectCenterSize(GetPoint(field, point->pos), V2(10, 10)), Captures(INTERACTION_DRAG | INTERACTION_CLICK));
          
@@ -335,13 +331,13 @@ void DrawPath(ui_field_topdown *field, EditorState *state, AutoPath *path) {
       }
 
       if(point_clicked) {
-         AutonomousProgram_ControlPoint *new_control_points =
-            PushArray(&state->project_arena, AutonomousProgram_ControlPoint, path->control_point_count - 1);
+         North_HermiteControlPoint *new_control_points =
+            PushArray(&state->project_arena, North_HermiteControlPoint, path->control_point_count - 1);
 
          u32 before_count = point_index;
-         Copy(path->control_points, before_count * sizeof(AutonomousProgram_ControlPoint), new_control_points);
+         Copy(path->control_points, before_count * sizeof(North_HermiteControlPoint), new_control_points);
          Copy(path->control_points + (point_index + 1), 
-               (path->control_point_count - point_index - 1) * sizeof(AutonomousProgram_ControlPoint), new_control_points + before_count);
+               (path->control_point_count - point_index - 1) * sizeof(North_HermiteControlPoint), new_control_points + before_count);
                
          path->control_points = new_control_points;
          path->control_point_count--;

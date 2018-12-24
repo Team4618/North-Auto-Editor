@@ -30,10 +30,28 @@ namespace North_MessageType {
    };
 };
 
-namespace North_CommandType {
+namespace North_CommandExecutionType {
    enum type {
       NonBlocking = 0,
       Blocking = 1,
       Continuous = 2,
+   };
+};
+
+struct North_HermiteControlPoint {
+   v2 pos;
+   v2 tangent; 
+};
+
+struct North_PathDataPoint {
+   f32 distance;
+   f32 value;
+};
+
+namespace North_CommandType {
+   enum type {
+      Generic = 1,
+      Wait = 2,
+      Pivot = 3,
    };
 };

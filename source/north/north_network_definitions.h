@@ -18,8 +18,7 @@ namespace PacketType {
       State = 3,
       ParameterOp = 4,
       SetState = 5,
-      CurrentAutoPath = 6,
-      UploadAutonomous = 7,
+      UploadAutonomous = 6,
       //NOTE: if we change a packet just make a new type instead 
       //eg. "Welcome" becomes "Welcome_V1" & we create "Welcome_V2"
    };
@@ -35,7 +34,6 @@ namespace Connect_Flags {
 struct Connect_PacketHeader {
    u8 flags;
 };
-
 //------------------------------------------
 
 //------------------------------------------
@@ -47,7 +45,7 @@ struct Connect_PacketHeader {
 struct Welcome_SubsystemCommand {
    u8 name_length;
    u8 param_count;
-   u8 type; //NOTE: North_CommandType
+   u8 type; //NOTE: North_CommandExecutionType
    //char name[name_length]
    //{ u8 length; char [length]; } [param_count]
 };
@@ -130,6 +128,13 @@ struct State_Marker {
    //char message[length]
 };
 
+struct State_Path {
+   u16 length;
+   u8 control_point_count;
+   //char message[length]
+   //North_HermiteControlPoint [control_point_count]
+};
+
 struct State_PacketHeader {
    v2 pos;
    f32 angle;
@@ -139,11 +144,13 @@ struct State_PacketHeader {
    u8 subsystem_count;
    u8 message_count;
    u8 marker_count;
+   u8 path_count;
    f32 time;
    
    //State_SubsystemDiagnostics [subsystem_count]
    //State_Message [message_count]
    //State_Marker [marker_count]
+   //State_Path [path_count]
 };
 //-----------------------------------------
 
@@ -174,21 +181,7 @@ struct SetState_PacketHeader {
    f32 angle;
 };
 
-//--------------------------------------
-struct CurrentAutoPath_Path {
-   v2 begin;
-   v2 end;
-   u8 is_conditional; //NOTE: 0 for false, else true
-   u8 control_point_count;
-   //v2 [control_point_count]
-};
-
-struct CurrentAutoPath_PacketHeader {
-   u8 path_count;
-   //Path [path_count]
-};
 //-------------------------------------
-
 struct UploadAutonomous_DataPoint {
    f32 distance;
    f32 value;

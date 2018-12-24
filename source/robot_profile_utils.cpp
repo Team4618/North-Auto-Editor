@@ -1,7 +1,7 @@
 //NOTE: requires common.cpp & the north defs
 
 struct RobotProfileCommand {
-   North_CommandType::type type;
+   North_CommandExecutionType::type type;
    string name;
    u32 param_count;
    string *params;
@@ -141,7 +141,7 @@ void RecieveWelcomePacket(RobotProfile *profile, buffer packet) {
          RobotProfileCommand *command = subsystem->commands + j;
          
          command->name = PushCopy(arena, ConsumeString(&packet, command_desc->name_length));
-         command->type = (North_CommandType::type) command_desc->type;
+         command->type = (North_CommandExecutionType::type) command_desc->type;
          command->param_count = command_desc->param_count;
          command->params = PushArray(arena, string, command->param_count);
 
@@ -295,7 +295,7 @@ void ParseProfileFile(RobotProfile *profile, buffer file, string name) {
          RobotProfileCommand *command = subsystem->commands + j;
          
          command->name = PushCopy(arena, ConsumeString(&file, file_command->name_length));
-         command->type = (North_CommandType::type) file_command->type;
+         command->type = (North_CommandExecutionType::type) file_command->type;
          command->param_count = file_command->param_count;
          command->params = PushArray(arena, string, command->param_count);
 

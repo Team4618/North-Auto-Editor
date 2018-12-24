@@ -4,14 +4,51 @@
 //    file linking
 //    starting point match & reflect
 
-struct AutoCommand {
+struct AutoContinuousEvent {
+   string subsystem_name;
+   string command_name;
+   u32 sample_count;
+   North_PathDataPoint *samples;
+};
+
+struct AutoDiscreteEvent {
+   f32 distance;
    string subsystem_name;
    string command_name;
    u32 param_count;
    f32 *params;
+};
 
+struct AutoCommand {
+   North_CommandType::type type;
    bool has_conditional;
    string conditional;
+
+   union {
+      struct {
+         string subsystem_name;
+         string command_name;
+         u32 param_count;
+         f32 *params;
+      } generic;
+
+      struct {
+         f32 duration;
+      } wait;
+
+      struct {
+         f32 dest_angle;
+
+         u32 velocity_datapoint_count;
+         North_PathDataPoint *velocity_datapoints;
+
+         u32 continuous_event_count;
+         AutoContinuousEvent *continuous_events;
+
+         u32 discrete_event_count;
+         AutoDiscreteEvent *discrete_events;
+      } pivot;
+   };
 };
 
 struct AutoPath;
@@ -24,21 +61,6 @@ struct AutoNode {
    
    u32 path_count;
    AutoPath **out_paths;
-};
-
-struct AutoContinuousEvent {
-   string subsystem_name;
-   string command_name;
-   u32 sample_count;
-   AutonomousProgram_DataPoint *samples;
-};
-
-struct AutoDiscreteEvent {
-   f32 distance;
-   string subsystem_name;
-   string command_name;
-   u32 param_count;
-   f32 *params;
 };
 
 struct AutoPath_LenLeaf {
@@ -84,6 +106,7 @@ struct AutoPath_TimeBranch {
 };
 
 //NOTE: this means we have 2^sample_exp samples
+//TODO: the (dist -> pos) map is bigger than the (time -> dist) map, thats why this works
 const u32 sample_exp = 7;
 u64 GetMapMemorySize() {
    u64 result = Power(2, sample_exp) * sizeof(AutoPath_LenLeaf);
@@ -106,7 +129,7 @@ struct AutoPath {
    string conditional;
 
    u32 velocity_datapoint_count;
-   AutonomousProgram_DataPoint *velocity_datapoints;
+   North_PathDataPoint *velocity_datapoints;
 
    u32 continuous_event_count;
    AutoContinuousEvent *continuous_events;
@@ -115,7 +138,7 @@ struct AutoPath {
    AutoDiscreteEvent *discrete_events;
 
    u32 control_point_count;
-   AutonomousProgram_ControlPoint *control_points;
+   North_HermiteControlPoint *control_points;
 
    //-------------------------------------
    MemoryArena length_to_pos_memory;
@@ -142,25 +165,25 @@ struct AutoProjectList {
 
 struct AutoPathSpline {
    u32 point_count;
-   AutonomousProgram_ControlPoint *points;
+   North_HermiteControlPoint *points;
 };
 
 AutoPathSpline GetAutoPathSpline(AutoPath *path, MemoryArena *arena = &__temp_arena) {
    u32 control_point_count = path->control_point_count + 2;
-   AutonomousProgram_ControlPoint *control_points = PushArray(arena, AutonomousProgram_ControlPoint, control_point_count);
+   North_HermiteControlPoint *control_points = PushArray(arena, North_HermiteControlPoint, control_point_count);
    control_points[0] = { path->in_node->pos, path->in_tangent };
    control_points[control_point_count - 1] = { path->out_node->pos, path->out_tangent };
-   Copy(path->control_points, path->control_point_count * sizeof(AutonomousProgram_ControlPoint), control_points + 1);
+   Copy(path->control_points, path->control_point_count * sizeof(North_HermiteControlPoint), control_points + 1);
 
    AutoPathSpline result = { control_point_count, control_points };
    return result;
 }
 
-v2 CubicHermiteSpline(AutonomousProgram_ControlPoint a, AutonomousProgram_ControlPoint b, f32 t) {
+v2 CubicHermiteSpline(North_HermiteControlPoint a, North_HermiteControlPoint b, f32 t) {
    return CubicHermiteSpline(a.pos, a.tangent, b.pos, b.tangent, t);
 }
 
-v2 CubicHermiteSplineTangent(AutonomousProgram_ControlPoint a, AutonomousProgram_ControlPoint b, f32 t) {
+v2 CubicHermiteSplineTangent(North_HermiteControlPoint a, North_HermiteControlPoint b, f32 t) {
    return CubicHermiteSplineTangent(a.pos, a.tangent, b.pos, b.tangent, t);
 }
 
@@ -224,8 +247,8 @@ void RecalculateAutoPathLength(AutoPath *path) {
 
 f32 GetVelocityAt(AutoPath *path, f32 distance) {
    for(u32 i = 1; i < path->velocity_datapoint_count; i++) {
-      AutonomousProgram_DataPoint a = path->velocity_datapoints[i - 1];
-      AutonomousProgram_DataPoint b = path->velocity_datapoints[i];
+      North_PathDataPoint a = path->velocity_datapoints[i - 1];
+      North_PathDataPoint b = path->velocity_datapoints[i];
       if((a.distance <= distance) && (distance <= b.distance)) {
          f32 t = (distance - a.distance) / (b.distance - a.distance);
          return lerp(a.value, t, b.value);
@@ -317,17 +340,76 @@ f32 GetAutoPathDistForTime(AutoPath *path, f32 time) {
    return lerp(branch->less_leaf->len, t, branch->greater_leaf->len);
 }
 
-AutoCommand CreateCommand(MemoryArena *arena, string subsystem_name, string command_name,
-                           u32 param_count, f32 *params, string conditional) 
-{
+AutoContinuousEvent ParseAutoContinuousEvent(buffer *file, MemoryArena *arena) {
+   AutoContinuousEvent result = {};
+   AutonomousProgram_ContinuousEvent *file_event = ConsumeStruct(file, AutonomousProgram_ContinuousEvent);
+   
+   result.subsystem_name = PushCopy(arena, ConsumeString(file, file_event->subsystem_name_length));
+   result.command_name = PushCopy(arena, ConsumeString(file, file_event->command_name_length));
+   result.sample_count = file_event->datapoint_count;
+   result.samples = ConsumeAndCopyArray(arena, file, North_PathDataPoint, file_event->datapoint_count);
+   
+   return result;
+}
+
+AutoDiscreteEvent ParseAutoDiscreteEvent(buffer *file, MemoryArena *arena) {
+   AutoDiscreteEvent result = {};
+   AutonomousProgram_DiscreteEvent *file_event = ConsumeStruct(file, AutonomousProgram_DiscreteEvent);
+            
+   result.subsystem_name = PushCopy(arena, ConsumeString(file, file_event->subsystem_name_length));
+   result.command_name = PushCopy(arena, ConsumeString(file, file_event->command_name_length));
+   result.param_count = file_event->parameter_count;
+   result.params = ConsumeAndCopyArray(arena, file, f32, file_event->parameter_count);
+   result.distance = file_event->distance;
+
+   return result;
+}
+
+AutoCommand ParseAutoCommand(buffer *file, MemoryArena *arena) {
    AutoCommand result = {};
-   result.subsystem_name = PushCopy(arena, subsystem_name);
-   result.command_name = PushCopy(arena, command_name);
-   result.param_count = param_count;
-   result.params = PushArray(arena, f32, param_count);
-   Copy(params, sizeof(f32) * param_count, result.params);
-   result.conditional = PushCopy(arena, conditional);
-   result.has_conditional = conditional.length > 0;
+   
+   AutonomousProgram_CommandHeader *header = ConsumeStruct(file, AutonomousProgram_CommandHeader);
+   result.type = (North_CommandType::type) header->type;
+   result.conditional = PushCopy(arena, ConsumeString(file, header->conditional_length));
+   
+   switch(result.type) {
+      case North_CommandType::Generic: {
+         AutonomousProgram_CommandBody_Generic *body = ConsumeStruct(file, AutonomousProgram_CommandBody_Generic);
+         result.generic.subsystem_name = PushCopy(arena, ConsumeString(file, body->subsystem_name_length));
+         result.generic.command_name = PushCopy(arena, ConsumeString(file, body->command_name_length));
+         result.generic.param_count = body->parameter_count;
+         result.generic.params = ConsumeAndCopyArray(arena, file, f32, body->parameter_count);
+      } break;
+
+      case North_CommandType::Wait: {
+         AutonomousProgram_CommandBody_Wait *body = ConsumeStruct(file, AutonomousProgram_CommandBody_Wait);
+         result.wait.duration = body->duration;
+      } break;
+
+      case North_CommandType::Pivot: {
+         AutonomousProgram_CommandBody_Pivot *body = ConsumeStruct(file, AutonomousProgram_CommandBody_Pivot);
+         result.pivot.dest_angle = body->dest_angle;
+
+         result.pivot.velocity_datapoint_count = body->velocity_datapoint_count;
+         Assert(result.pivot.velocity_datapoint_count > 2);
+         result.pivot.velocity_datapoints = ConsumeAndCopyArray(arena, file, North_PathDataPoint, body->velocity_datapoint_count);
+
+         result.pivot.continuous_event_count = body->continuous_event_count;
+         result.pivot.continuous_events = PushArray(arena, AutoContinuousEvent, body->continuous_event_count);
+         for(u32 i = 0; i < body->continuous_event_count; i++) {
+            result.pivot.continuous_events[i] = ParseAutoContinuousEvent(file, arena);
+         }
+
+         result.pivot.discrete_event_count = body->discrete_event_count;
+         result.pivot.discrete_events = PushArray(arena, AutoDiscreteEvent, body->discrete_event_count);
+         for(u32 i = 0; i < body->discrete_event_count; i++) {
+            result.pivot.discrete_events[i] = ParseAutoDiscreteEvent(file, arena);
+         }
+      } break;
+
+      default: Assert(false);
+   }
+
    return result;
 }
 
@@ -343,13 +425,7 @@ AutoNode *ParseAutoNode(buffer *file, MemoryArena *arena) {
    result->commands = PushArray(arena, AutoCommand, result->command_count);
 
    for(u32 i = 0; i < file_node->command_count; i++) {
-      AutonomousProgram_Command *file_command = ConsumeStruct(file, AutonomousProgram_Command);
-      string subsystem_name = ConsumeString(file, file_command->subsystem_name_length);
-      string command_name = ConsumeString(file, file_command->command_name_length);
-      f32 *params = ConsumeArray(file, f32, file_command->parameter_count);
-      string conditional = ConsumeString(file, file_command->conditional_length);
-      
-      result->commands[i] = CreateCommand(arena, subsystem_name, command_name, file_command->parameter_count, params, conditional);
+      result->commands[i] = ParseAutoCommand(file, arena);
    }
    
    for(u32 i = 0; i < file_node->path_count; i++) {
@@ -379,44 +455,22 @@ AutoPath *ParseAutoPath(buffer *file, MemoryArena *arena) {
    }
 
    path->control_point_count = file_path->control_point_count;
-   path->control_points = ConsumeAndCopyArray(arena, file, AutonomousProgram_ControlPoint, file_path->control_point_count);
+   path->control_points = ConsumeAndCopyArray(arena, file, North_HermiteControlPoint, file_path->control_point_count);
    
    path->velocity_datapoint_count = file_path->velocity_datapoint_count;
    Assert(path->velocity_datapoint_count > 2);
-   path->velocity_datapoints = ConsumeAndCopyArray(arena, file, AutonomousProgram_DataPoint, file_path->velocity_datapoint_count);
+   path->velocity_datapoints = ConsumeAndCopyArray(arena, file, North_PathDataPoint, file_path->velocity_datapoint_count);
 
    path->continuous_event_count = file_path->continuous_event_count;
    path->continuous_events = PushArray(arena, AutoContinuousEvent, path->continuous_event_count);
    for(u32 i = 0; i < file_path->continuous_event_count; i++) {
-      AutonomousProgram_ContinuousEvent *file_event = ConsumeStruct(file, AutonomousProgram_ContinuousEvent);
-      AutoContinuousEvent *event = path->continuous_events + i;
-
-      event->subsystem_name = PushCopy(arena, ConsumeString(file, file_event->subsystem_name_length));
-      event->command_name = PushCopy(arena, ConsumeString(file, file_event->command_name_length));
-      event->sample_count = file_event->datapoint_count;
-      event->samples = PushArray(arena, AutonomousProgram_DataPoint, event->sample_count);
-      AutonomousProgram_DataPoint *data_points = ConsumeArray(file, AutonomousProgram_DataPoint, file_event->datapoint_count);
-      for(u32 j = 0; j < event->sample_count; j++) {
-         event->samples[j].distance = data_points[j].distance;
-         event->samples[j].value = data_points[j].value;
-      }
+      path->continuous_events[i] = ParseAutoContinuousEvent(file, arena);
    }
 
    path->discrete_event_count = file_path->discrete_event_count;
    path->discrete_events = PushArray(arena, AutoDiscreteEvent, path->discrete_event_count);
    for(u32 i = 0; i < file_path->discrete_event_count; i++) {
-      AutonomousProgram_DiscreteEvent *file_event = ConsumeStruct(file, AutonomousProgram_DiscreteEvent);
-      AutoDiscreteEvent *event = path->discrete_events + i;
-      
-      string subsystem_name = ConsumeString(file, file_event->subsystem_name_length);
-      string command_name = ConsumeString(file, file_event->command_name_length);
-      f32 *params = ConsumeArray(file, f32, file_event->parameter_count);
-      
-      event->subsystem_name = PushCopy(arena, subsystem_name);
-      event->command_name = PushCopy(arena, command_name);
-      event->param_count = file_event->parameter_count;
-      event->params = PushArrayCopy(arena, f32, params, file_event->parameter_count);
-      event->distance = file_event->distance;
+      path->discrete_events[i] = ParseAutoDiscreteEvent(file, arena);
    }
 
    path->length_to_pos_memory = PlatformAllocArena(GetMapMemorySize());
@@ -465,6 +519,75 @@ void ReadProjectsStartingAt(AutoProjectList *list, u32 field_flags, v2 pos) {
    }
 }
 
+void WriteAutoContinuousEvent(buffer *file, AutoContinuousEvent *event) {
+   WriteStructData(file, AutonomousProgram_ContinuousEvent, event_header, {
+      event_header.subsystem_name_length = event->subsystem_name.length;
+      event_header.command_name_length = event->command_name.length;
+      event_header.datapoint_count = event->sample_count;
+   });
+   WriteString(file, event->subsystem_name);
+   WriteString(file, event->command_name);
+   WriteArray(file, event->samples, event->sample_count);
+}
+
+void WriteAutoDiscreteEvent(buffer *file, AutoDiscreteEvent *event) {
+   WriteStructData(file, AutonomousProgram_DiscreteEvent, event_header, {
+      event_header.distance = event->distance;
+      event_header.subsystem_name_length = event->subsystem_name.length;
+      event_header.command_name_length = event->command_name.length;
+      event_header.parameter_count = event->param_count;
+   });
+   WriteString(file, event->subsystem_name);
+   WriteString(file, event->command_name);
+   WriteArray(file, event->params, event->param_count);
+}
+
+void WriteAutoCommand(buffer *file, AutoCommand *command) {
+   WriteStructData(file, AutonomousProgram_CommandHeader, header, {
+      header.type = (u8) command->type;
+      header.conditional_length = command->has_conditional ? command->conditional.length : 0;
+   });
+   
+   if(command->has_conditional)
+      WriteString(file, command->conditional);
+
+   switch(command->type) {
+      case North_CommandType::Generic: {
+         WriteStructData(file, AutonomousProgram_CommandBody_Generic, body, {
+            body.subsystem_name_length = command->generic.subsystem_name.length;
+            body.command_name_length = command->generic.command_name.length;
+            body.parameter_count = command->generic.param_count;
+         });
+         WriteString(file, command->generic.subsystem_name);
+         WriteString(file, command->generic.command_name);
+         WriteArray(file, command->generic.params, command->generic.param_count);
+      } break;
+
+      case North_CommandType::Wait: {
+         WriteStructData(file, AutonomousProgram_CommandBody_Wait, body, {
+            body.duration = command->wait.duration;
+         });
+      } break;
+
+      case North_CommandType::Pivot: {
+         WriteStructData(file, AutonomousProgram_CommandBody_Pivot, body, {
+            body.dest_angle = command->pivot.dest_angle;
+            body.velocity_datapoint_count = command->pivot.velocity_datapoint_count;
+            body.continuous_event_count = command->pivot.continuous_event_count;
+            body.discrete_event_count = command->pivot.discrete_event_count;
+         });
+         
+         WriteArray(file, command->pivot.velocity_datapoints, command->pivot.velocity_datapoint_count);
+         ForEachArray(i, event, command->pivot.continuous_event_count, command->pivot.continuous_events, {
+            WriteAutoContinuousEvent(file, event);
+         });
+         ForEachArray(i, event, command->pivot.discrete_event_count, command->pivot.discrete_events, {
+            WriteAutoDiscreteEvent(file, event);
+         });
+      } break;
+   }
+}
+
 void WriteAutoPath(buffer *file, AutoPath *path);
 void WriteAutoNode(buffer *file, AutoNode *node) {
    WriteStructData(file, AutonomousProgram_Node, node_header, {
@@ -474,18 +597,7 @@ void WriteAutoNode(buffer *file, AutoNode *node) {
    });
 
    ForEachArray(i, command, node->command_count, node->commands, {
-      WriteStructData(file, AutonomousProgram_Command, command_header, {
-         command_header.subsystem_name_length = command->subsystem_name.length;
-         command_header.command_name_length = command->command_name.length;
-         command_header.parameter_count = command->param_count;
-         command_header.conditional_length = command->has_conditional ? command->conditional.length : 0;
-      });
-      WriteString(file, command->subsystem_name);
-      WriteString(file, command->command_name);
-      WriteArray(file, command->params, command->param_count);
-      
-      if(command->has_conditional)
-         WriteString(file, command->conditional);
+      WriteAutoCommand(file, command);
    });
 
    ForEachArray(i, path, node->path_count, node->out_paths, {
@@ -514,25 +626,10 @@ void WriteAutoPath(buffer *file, AutoPath *path) {
    
    WriteArray(file, path->velocity_datapoints, path->velocity_datapoint_count);
    ForEachArray(i, event, path->continuous_event_count, path->continuous_events, {
-      WriteStructData(file, AutonomousProgram_ContinuousEvent, event_header, {
-         event_header.subsystem_name_length = event->subsystem_name.length;
-         event_header.command_name_length = event->command_name.length;
-         event_header.datapoint_count = event->sample_count;
-      });
-      WriteString(file, event->subsystem_name);
-      WriteString(file, event->command_name);
-      WriteArray(file, event->samples, event->sample_count);
+      WriteAutoContinuousEvent(file, event);
    });
    ForEachArray(i, event, path->discrete_event_count, path->discrete_events, {
-      WriteStructData(file, AutonomousProgram_DiscreteEvent, event_header, {
-         event_header.distance = event->distance;
-         event_header.subsystem_name_length = event->subsystem_name.length;
-         event_header.command_name_length = event->command_name.length;
-         event_header.parameter_count = event->param_count;
-      });
-      WriteString(file, event->subsystem_name);
-      WriteString(file, event->command_name);
-      WriteArray(file, event->params, event->param_count);
+      WriteAutoDiscreteEvent(file, event);
    });
 
    WriteAutoNode(file, path->out_node);

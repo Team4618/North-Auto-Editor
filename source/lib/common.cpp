@@ -420,6 +420,14 @@ f32 abs(f32 x) {
    return (x > 0) ? x : -x;
 }
 
+f32 ToDegrees(f32 r) {
+   return r * (180 / PI32);
+}
+
+f32 ToRadians(f32 d) {
+   return d * (PI32 / 180);
+}
+
 union v4 {
    struct { f32 r, g, b, a; };
    struct { f32 x, y, z, w; };

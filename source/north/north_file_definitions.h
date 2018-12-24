@@ -10,7 +10,7 @@ FileHeader header(u32 magic_number, u32 version_number) {
    return result;
 }
 
-//-----------------------------------------------------------
+//Settings----------------------------------------------------
 //NOTE: unused right now
 /*
 namespace SettingFlags {
@@ -30,7 +30,7 @@ struct Settings_FileHeader {
 };
 //-----------------------------------------------------------
 
-//-----------------------------------------------------------
+//Field------------------------------------------------------
 namespace Field_Flags {
    enum type {
       MIRRORED = (1 << 0), //eg. steamworks
@@ -57,7 +57,7 @@ struct Field_FileHeader {
 };
 //-----------------------------------------------------------
 
-//-----------------------------------------------------------
+//RobotProfile-----------------------------------------------
 struct RobotProfile_Parameter {
    u8 is_array;
    u8 name_length; 
@@ -69,7 +69,7 @@ struct RobotProfile_Parameter {
 struct RobotProfile_SubsystemCommand {
    u8 name_length;
    u8 param_count;
-   u8 type; //NOTE: North_CommandType
+   u8 type; //NOTE: North_CommandExecutionType
    //char name[name_length]
    //{ u8 length; char [length]; } [param_count]
 };
@@ -105,7 +105,7 @@ struct RobotProfile_FileHeader {
 };
 //-----------------------------------------------------------
 
-//-----------------------------------------------------------
+//RobotRecording---------------------------------------------
 struct RobotRecording_SubsystemDiagnostics {
    u8 name_length;
    u8 diagnostic_count;
@@ -148,6 +148,15 @@ struct RobotRecording_Marker {
    //char message[length]
 };
 
+struct RobotRecording_Path {
+   u16 length;
+   u8 control_point_count;
+   f32 begin_time;
+   f32 end_time;
+   //char message[length]
+   //North_HermiteControlPoint [control_point_count]
+};
+
 struct RobotRecording_FileHeader {
 #define ROBOT_RECORDING_MAGIC_NUMBER RIFF_CODE("NCRR") 
 #define ROBOT_RECORDING_CURR_VERSION 0
@@ -159,28 +168,25 @@ struct RobotRecording_FileHeader {
    u32 robot_state_sample_count;
    u32 message_count;
    u32 marker_count; 
+   u32 path_count;
 
    //char [robot_name_length]
    //RobotRecording_RobotStateSample [robot_state_sample_count]
    //RobotRecording_SubsystemDiagnostics [subsystem_count]
    //RobotRecording_Message [message_count]
-   //RoboRecording_Marker [marker_count]
+   //RobotRecording_Marker [marker_count]
+   //RobotRecording_Path [path_count]
 };
 //-----------------------------------------------------------
 
-//-----------------------------------------------------------
-struct AutonomousProgram_DataPoint {
-   f32 distance;
-   f32 value;
-};
-
+//AutonomousProgram------------------------------------------
 struct AutonomousProgram_ContinuousEvent {
    u8 subsystem_name_length;
    u8 command_name_length;
    u8 datapoint_count;
    //char [subsystem_name_length]
    //char [command_name_length]
-   //AutonomousProgram_DataPoint [datapoint_count]
+   //North_PathDataPoint [datapoint_count]
 };
 
 struct AutonomousProgram_DiscreteEvent {
@@ -191,11 +197,6 @@ struct AutonomousProgram_DiscreteEvent {
    //char [subsystem_name_length]
    //char [command_name_length]
    //f32 [parameter_count]
-};
-
-struct AutonomousProgram_ControlPoint {
-   v2 pos;
-   v2 tangent;
 };
 
 struct AutonomousProgram_Path {
@@ -213,24 +214,45 @@ struct AutonomousProgram_Path {
    u8 discrete_event_count;
 
    //char conditional_name [conditional_length]
-   //AutonomousProgram_ControlPoint [control_point_count]
+   //North_HermiteControlPoint [control_point_count]
 
-   //AutonomousProgram_DataPoint [velocity_datapoint_count]
+   //North_PathDataPoint [velocity_datapoint_count]
    //AutonomousProgram_ContinuousEvent [continuous_event_count]
    //AutonomousProgram_DiscreteEvent [discrete_event_count]
 
    //AutonomousProgram_Node end_node
 };
 
-struct AutonomousProgram_Command {
+struct AutonomousProgram_CommandHeader {
+   u8 type; //NOTE: North_CommandType
+   u8 conditional_length;
+   //char [conditional_length]
+   //AutonomousProgram_CommandBody_[type]
+};
+
+struct AutonomousProgram_CommandBody_Generic {
    u8 subsystem_name_length;
    u8 command_name_length;
    u8 parameter_count;
-   u8 conditional_length;
+   
    //char [subsystem_name_length]
    //char [command_name_length]
    //f32 [parameter_count]
-   //char [conditional_length]
+};
+
+struct AutonomousProgram_CommandBody_Wait {
+   f32 duration;
+};
+
+struct AutonomousProgram_CommandBody_Pivot {
+   f32 dest_angle;
+   u8 velocity_datapoint_count;
+   u8 continuous_event_count;
+   u8 discrete_event_count;
+
+   //North_PathDataPoint [velocity_datapoint_count]
+   //AutonomousProgram_ContinuousEvent [continuous_event_count]
+   //AutonomousProgram_DiscreteEvent [discrete_event_count]
 };
 
 struct AutonomousProgram_Node {
