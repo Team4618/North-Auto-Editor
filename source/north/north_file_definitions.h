@@ -225,8 +225,6 @@ struct AutonomousProgram_Path {
 
 struct AutonomousProgram_CommandHeader {
    u8 type; //NOTE: North_CommandType
-   u8 conditional_length;
-   //char [conditional_length]
    //AutonomousProgram_CommandBody_[type]
 };
 
@@ -245,7 +243,9 @@ struct AutonomousProgram_CommandBody_Wait {
 };
 
 struct AutonomousProgram_CommandBody_Pivot {
-   f32 dest_angle;
+   f32 start_angle;
+   f32 end_angle;
+   u8 turns_clockwise;
    u8 velocity_datapoint_count;
    u8 continuous_event_count;
    u8 discrete_event_count;

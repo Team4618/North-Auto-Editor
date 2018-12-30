@@ -63,54 +63,65 @@ rect2 GetClampRectOnGraph(editable_graph_line line, u32 i) {
    return RectMinMax(V2(x1, line.e->bounds.min.y), V2(x2, line.e->bounds.max.y));  
 }
 
-bool GraphHandle(editable_graph_line line, u32 i) {
+struct ui_graph_handle {
+   bool moved;
+   bool clicked;
+};
+
+ui_graph_handle GraphHandle(editable_graph_line line, u32 i) {
    v2 point = GetGraphPoint(line, line.samples[i]);
-   element *handle = Panel(line.e, RectCenterSize(point, V2(15, 15)), Captures(INTERACTION_DRAG));
+   element *handle = Panel(line.e, RectCenterSize(point, V2(15, 15)), Captures(INTERACTION_DRAG | INTERACTION_CLICK));
    Background(handle, BLUE);
 
    if(IsHot(handle)) {
       Text(line.e, Concat(Literal("Value="), ToString(line.samples[i].value)), line.e->bounds.min, 20, WHITE);
    }
 
+   ui_graph_handle result = {};
+   result.clicked = WasClicked(handle);
+
    v2 drag_vector = GetDrag(handle);
    if(Length(drag_vector) > 0) {
       v2 new_point = ClampTo(point + drag_vector, GetClampRectOnGraph(line, i));   
       line.samples[i] = GraphPointToDataPoint(line, new_point);
-      return true;
+      result.moved = true;
    }
 
-   return false;
+   return result;
 }
 //---------------------------------------------------
+struct ui_pathlike_editor {
+   bool recalculate;
+   element *graph;
+};
 
-void DrawPivotCommandEditor(EditorState *state, AutoCommand *command, element *command_panel, RobotProfile *profile) {
-   UI_SCOPE(command_panel, command);
-   element *compass = Panel(command_panel, Size(50, 50).Captures(INTERACTION_ACTIVE));
-   u32 compass_point_count = 20;
-   v2 *compass_points = PushTempArray(v2, compass_point_count);
-   for(u32 i = 0; i < compass_point_count; i++) {
-      f32 angle = i * (360.0f / (f32)compass_point_count);
-      compass_points[i] = Center(compass) + 25 * V2(cosf(ToRadians(angle)), -sinf(ToRadians(angle)));
-   }
-   _Line(compass, BLACK, 2, compass_points, compass_point_count, true);
-   Line(compass, BLACK, 2, Center(compass), Center(compass) + 25 * V2(cosf(ToRadians(command->pivot.dest_angle)), -sinf(ToRadians(command->pivot.dest_angle))));
-   
-   element *angle_row = RowPanel(command_panel, Size(Size(command_panel).x, 20)); 
-   Label(angle_row, "Dest angle: ", 20, WHITE);
-   TextBox(angle_row, &command->pivot.dest_angle, 20);
-   
-   element *graph = Panel(command_panel, Size(Size(command_panel).x - 10, 200).Padding(5, 5).Captures(INTERACTION_CLICK));
+ui_pathlike_editor DrawPathlikeDataEditor(EditorState *state, element *parent, RobotProfile *profile,
+                                          AutoPathlikeData *data, f32 path_length)
+{
+   ui_pathlike_editor result = {};
+   element *graph = Panel(parent, Size(Size(parent).x - 10, 200).Padding(5, 5).Captures(INTERACTION_CLICK));
    Outline(graph, light_grey);
-
+   result.graph = graph;
+   
    bool new_velocity_sample = false;
    u32 new_velocity_sample_i = 0;
+   
+   bool remove_velocity_sample = false;
+   u32 remove_velocity_sample_i = 0;
 
-   editable_graph_line velocity_line = GraphLine(graph, 0, 20, 180/*TODO*/, command->pivot.velocity_datapoints, command->pivot.velocity_datapoint_count);
-   for(u32 i = 0; i < command->pivot.velocity_datapoint_count; i++) {
-      UI_SCOPE(graph, i);
+   editable_graph_line velocity_line = GraphLine(graph, 0, 20, path_length, data->velocity_datapoints, data->velocity_datapoint_count);
+   for(u32 i = 0; i < data->velocity_datapoint_count; i++) {
+      UI_SCOPE(graph, data->velocity_datapoints + i);
       
-      if((i != 0) && (i != (command->pivot.velocity_datapoint_count - 1))) {
-         GraphHandle(velocity_line, i);
+      if((i != 0) && (i != (data->velocity_datapoint_count - 1))) {
+         ui_graph_handle handle = GraphHandle(velocity_line, i);
+         if(handle.moved) {
+            result.recalculate = true;
+         }
+         if(handle.clicked) {
+            remove_velocity_sample = true;
+            remove_velocity_sample_i = i;
+         }
       }
 
       if(i > 0) {
@@ -129,64 +140,108 @@ void DrawPivotCommandEditor(EditorState *state, AutoCommand *command, element *c
 
    if(new_velocity_sample) {
       North_PathDataPoint new_datapoint = {};
-      new_datapoint.distance = (command->pivot.velocity_datapoints[new_velocity_sample_i - 1].distance + command->pivot.velocity_datapoints[new_velocity_sample_i].distance) / 2;
-      new_datapoint.value = (command->pivot.velocity_datapoints[new_velocity_sample_i - 1].value + command->pivot.velocity_datapoints[new_velocity_sample_i].value) / 2;
+      new_datapoint.distance = (data->velocity_datapoints[new_velocity_sample_i - 1].distance + data->velocity_datapoints[new_velocity_sample_i].distance) / 2;
+      new_datapoint.value = (data->velocity_datapoints[new_velocity_sample_i - 1].value + data->velocity_datapoints[new_velocity_sample_i].value) / 2;
       
-      command->pivot.velocity_datapoints = 
-                     ArrayInsert(&state->project_arena, North_PathDataPoint, command->pivot.velocity_datapoints,
-                                 new_velocity_sample_i, &new_datapoint, command->pivot.velocity_datapoint_count++);
+      data->velocity_datapoints = 
+                     ArrayInsert(&state->project_arena, North_PathDataPoint, data->velocity_datapoints,
+                                 new_velocity_sample_i, &new_datapoint, data->velocity_datapoint_count++);
+      
+      result.recalculate = true;
+   } else if(remove_velocity_sample) {
+      data->velocity_datapoints = 
+         ArrayRemove(&state->project_arena, North_PathDataPoint, data->velocity_datapoints,
+                     remove_velocity_sample_i, data->velocity_datapoint_count--);
+
+      result.recalculate = true;
    }
 
-   ForEachArray(i, cevent, command->pivot.continuous_event_count, command->pivot.continuous_events, {
+   bool remove_cevent = false;
+   u32 remove_cevent_i = 0;
+
+   ForEachArray(i, cevent, data->continuous_event_count, data->continuous_events, {
       UI_SCOPE(graph, cevent);
+      v4 line_colour = GetCommand(profile, cevent->subsystem_name, cevent->command_name)->colour;
       
-      bool new_sample = false;
-      u32 new_sample_i = 0;
-
-      editable_graph_line curr_line = GraphLine(graph, 0, 20, 180/**/, cevent->samples, cevent->sample_count);
-      for(u32 i = 0; i < cevent->sample_count; i++) {
-         UI_SCOPE(graph, cevent->samples + i);
-         
-         GraphHandle(curr_line, i);
-
-         if(i == 0) {
-            cevent->samples[i].distance = 0;
-         } else if(i == (cevent->sample_count - 1)) { 
-            cevent->samples[i].distance = 180 /**/;
-         }
-
-         if(i > 0) {
-            v2 point_a = GetGraphPoint(curr_line, i - 1);
-            v2 point_b = GetGraphPoint(curr_line, i);
-            
-            Line(graph, GREEN, 2, point_a, point_b);
-            element *new_sample_button = Panel(graph, RectCenterSize(Midpoint(point_a, point_b), V2(5, 5)), Captures(INTERACTION_CLICK));
-            Background(new_sample_button, RED);
-            if(WasClicked(new_sample_button)) {
-               new_sample = true;
-               new_sample_i = i;
-            }
-         }
+      element *cevent_panel = RowPanel(parent, Size(Size(parent).x - 10, 40).Captures(INTERACTION_HOT));
+      Background(cevent_panel, dark_grey);
+      Outline(cevent_panel, IsHot(cevent_panel) ? V4(120/255.0, 120/255.0, 120/255.0, 1) : light_grey);
+      Label(cevent_panel, Concat(cevent->subsystem_name, Literal(":"), cevent->command_name), 40, line_colour);
+      if(Button(cevent_panel, "Hide", menu_button.IsSelected(cevent->hidden)).clicked) {
+         cevent->hidden = !cevent->hidden;
+      }
+      if(Button(cevent_panel, "Delete", menu_button).clicked) {
+         remove_cevent = true;
+         remove_cevent_i = i;
       }
 
-      if(new_sample) {
-         North_PathDataPoint new_datapoint = {};
-         new_datapoint.distance = (cevent->samples[new_sample_i - 1].distance + cevent->samples[new_sample_i].distance) / 2;
-         new_datapoint.value = (cevent->samples[new_sample_i - 1].value + cevent->samples[new_sample_i].value) / 2;
-         
-         cevent->samples = ArrayInsert(&state->project_arena, North_PathDataPoint, cevent->samples,
-                                       new_sample_i, &new_datapoint, cevent->sample_count++);
+      if(!cevent->hidden) {
+         bool add_sample = false;
+         u32 add_sample_i = 0;
+
+         bool remove_sample = false;
+         u32 remove_sample_i = 0;
+
+         editable_graph_line curr_line = GraphLine(graph, 0, 20, path_length, cevent->samples, cevent->sample_count);
+         for(u32 i = 0; i < cevent->sample_count; i++) {
+            UI_SCOPE(graph, cevent->samples + i);
+            ui_graph_handle handle = GraphHandle(curr_line, i);
+
+            if((i != 0) && (i != (cevent->sample_count - 1)) && handle.clicked) {
+               remove_sample = true;
+               remove_sample_i = i;
+            }
+
+            cevent->samples[0].distance = 0;
+            cevent->samples[cevent->sample_count - 1].distance = path_length;
+            
+            if(i > 0) {
+               v2 point_a = GetGraphPoint(curr_line, i - 1);
+               v2 point_b = GetGraphPoint(curr_line, i);
+               
+               Line(graph, line_colour, IsHot(cevent_panel) ? 4 : 2, point_a, point_b);
+               element *new_sample_button = Panel(graph, RectCenterSize(Midpoint(point_a, point_b), V2(5, 5)), Captures(INTERACTION_CLICK));
+               Background(new_sample_button, RED);
+               if(WasClicked(new_sample_button)) {
+                  add_sample = true;
+                  add_sample_i = i;
+               }
+            }
+         }
+
+         if(add_sample) {
+            North_PathDataPoint new_datapoint = {};
+            new_datapoint.distance = (cevent->samples[add_sample_i - 1].distance + cevent->samples[add_sample_i].distance) / 2;
+            new_datapoint.value = (cevent->samples[add_sample_i - 1].value + cevent->samples[add_sample_i].value) / 2;
+            
+            cevent->samples = ArrayInsert(&state->project_arena, North_PathDataPoint, cevent->samples,
+                                          add_sample_i, &new_datapoint, cevent->sample_count++);
+
+            result.recalculate = true;
+         } else if(remove_sample) {
+            cevent->samples = ArrayRemove(&state->project_arena, North_PathDataPoint, cevent->samples,
+                                          remove_sample_i, cevent->sample_count--);
+
+            result.recalculate = true;
+         }
       }
    });
 
+   if(remove_cevent) {
+      data->continuous_events =
+         ArrayRemove(&state->project_arena, AutoContinuousEvent, data->continuous_events,
+                     remove_cevent_i, data->continuous_event_count--);
+   }
+
    bool remove_devent = false;
    u32 remove_devent_i = 0;
-   ForEachArray(i, devent, command->pivot.discrete_event_count, command->pivot.discrete_events, {
+
+   ForEachArray(i, devent, data->discrete_event_count, data->discrete_events, {
       RobotProfileCommand *command_template = GetCommand(profile, devent->subsystem_name, devent->command_name);
       Assert(command_template);
       
-      UI_SCOPE(command_panel, devent);
-      element *devent_panel = ColumnPanel(command_panel, Width(Size(command_panel).x).Padding(0, 5).Captures(INTERACTION_DRAG));
+      UI_SCOPE(parent, devent);
+      element *devent_panel = ColumnPanel(parent, Width(Size(parent).x).Padding(0, 5).Captures(INTERACTION_DRAG));
       
       element *button_row = RowPanel(devent_panel, Size(Size(devent_panel).x, page_tab_height)); 
       if(Button(button_row, "Delete", menu_button).clicked) {
@@ -205,13 +260,99 @@ void DrawPivotCommandEditor(EditorState *state, AutoCommand *command, element *c
          TextBox(param_row, param_value, 20);
       }
 
-      HorizontalSlider(devent_panel, &devent->distance, 0, 180/**/, V2(Size(devent_panel).x, 20));
+      HorizontalSlider(devent_panel, &devent->distance, 0, path_length, V2(Size(devent_panel).x, 20));
    });
 
    if(remove_devent) {
-      command->pivot.discrete_events =
-         ArrayRemove(&state->project_arena, AutoDiscreteEvent, command->pivot.discrete_events,
-                     remove_devent_i, command->pivot.discrete_event_count--);
+      data->discrete_events =
+         ArrayRemove(&state->project_arena, AutoDiscreteEvent, data->discrete_events,
+                     remove_devent_i, data->discrete_event_count--);
+   }
+
+   for(u32 i = 0; i < profile->subsystem_count; i++) {
+      RobotProfileSubsystem *subsystem = profile->subsystems + i;
+      
+      for(u32 j = 0; j < subsystem->command_count; j++) {
+         RobotProfileCommand *command = subsystem->commands + j;
+         UI_SCOPE(parent, command);
+
+         if(command->type == North_CommandExecutionType::Continuous) {
+            bool already_has_line = false;
+
+            for(u32 k = 0; k < data->continuous_event_count; k++) {
+               AutoContinuousEvent *cevent = data->continuous_events + k;
+               if((cevent->subsystem_name == subsystem->name) && (cevent->command_name == command->name)) {
+                  already_has_line = true;
+                  break;
+               }
+            }
+
+            if(!already_has_line) {
+               if(Button(parent, Concat(Literal("C "), subsystem->name, Literal(":"), command->name), menu_button).clicked) {
+                  AutoContinuousEvent new_cevent = {};
+                  new_cevent.subsystem_name = PushCopy(&state->project_arena, subsystem->name);
+                  new_cevent.command_name = PushCopy(&state->project_arena, command->name);
+                  new_cevent.sample_count = 3;
+                  new_cevent.samples = PushArray(&state->project_arena, North_PathDataPoint, new_cevent.sample_count);
+
+                  new_cevent.samples[0] = { 0, 0 };
+                  new_cevent.samples[1] = { path_length * 0.5f, 5 };
+                  new_cevent.samples[2] = { path_length, 10 };
+
+                  data->continuous_events = 
+                     ArrayInsert(&state->project_arena, AutoContinuousEvent, data->continuous_events,
+                                 0, &new_cevent, data->continuous_event_count++);
+               }
+            }
+         } else if(command->type == North_CommandExecutionType::NonBlocking) {
+            if(Button(parent, Concat(Literal("D "), subsystem->name, Literal(":"), command->name), menu_button).clicked) {
+               AutoDiscreteEvent new_event = {};
+               new_event.subsystem_name = PushCopy(&state->project_arena, subsystem->name);
+               new_event.command_name = PushCopy(&state->project_arena, command->name);
+               new_event.param_count = command->param_count;
+               new_event.params = PushArray(&state->project_arena, f32, command->param_count);
+               
+               data->discrete_events = 
+                  ArrayInsert(&state->project_arena, AutoDiscreteEvent, data->discrete_events,
+                              0, &new_event, data->discrete_event_count++);
+            }
+         }
+      };
+   };
+
+   return result;
+}
+//---------------------------------------------------
+
+void DrawPivotCommandEditor(EditorState *state, AutoCommand *command, element *command_panel, RobotProfile *profile) {
+   UI_SCOPE(command_panel, command);
+   element *compass = Panel(command_panel, Size(105, 105).Captures(INTERACTION_ACTIVE));
+   Circle(compass, Center(compass), 50, BLACK, 2);
+   Line(compass, BLACK, 2, Center(compass), Center(compass) + 50 * DirectionNormal(command->pivot.start_angle));
+   Line(compass, RED, 2, Center(compass), Center(compass) + 50 * DirectionNormal(command->pivot.end_angle));
+   Arc(compass, Center(compass), 50, command->pivot.start_angle, command->pivot.end_angle, command->pivot.turns_clockwise, RED, 2);
+
+   ForEachArray(i, devent, command->pivot.data.discrete_event_count, command->pivot.data.discrete_events, {
+      Line(compass, BLACK, 2, 
+           Center(compass) + 25 * DirectionNormal(command->pivot.start_angle + devent->distance), 
+           Center(compass) + 50 * DirectionNormal(command->pivot.start_angle + devent->distance));
+   });
+
+   element *angle_row = RowPanel(command_panel, Size(Size(command_panel).x, 20)); 
+   Label(angle_row, Concat(Literal("Angle Between "), ToString(AngleBetween(command->pivot.start_angle, command->pivot.end_angle, command->pivot.turns_clockwise))), 20, WHITE);
+   Label(angle_row, "Dest angle: ", 20, WHITE);
+   TextBox(angle_row, &command->pivot.end_angle, 20);
+   Label(angle_row, "Clockwise: ", 20, WHITE);
+   CheckBox(angle_row, &command->pivot.turns_clockwise, V2(20, 20));
+   Label(angle_row, IsClockwiseShorter(command->pivot.start_angle, command->pivot.end_angle) ? "CW Is Shorter" : "CCW Is Shorter", 20, WHITE);
+
+   f32 pivot_length = abs(AngleBetween(command->pivot.start_angle, command->pivot.end_angle, command->pivot.turns_clockwise));
+   ui_pathlike_editor path_editor = DrawPathlikeDataEditor(state, command_panel, profile, &command->pivot.data, pivot_length);
+
+   if(IsHot(path_editor.graph)) {
+      f32 cursor_d = pivot_length * (GetLocalCursor(path_editor.graph).x / Size(path_editor.graph).x);
+      Text(path_editor.graph, Concat(Literal("Distance="), ToString(cursor_d)), path_editor.graph->bounds.min, 20, WHITE);
+      Rectangle(compass, RectCenterSize(Center(compass) + 50 * DirectionNormal(command->pivot.start_angle + cursor_d), V2(5, 5)), BLACK);
    }
 }
 
@@ -241,12 +382,12 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
       new_path->out_tangent = Normalize(new_path->out_node->pos - new_path->in_node->pos);
       
       RecalculateAutoPathLength(new_path);
-      new_path->velocity_datapoint_count = 4;
-      new_path->velocity_datapoints = PushArray(&state->project_arena, North_PathDataPoint, 4);
-      new_path->velocity_datapoints[0] = { 0, 0 };
-      new_path->velocity_datapoints[1] = { new_path->length * 0.1f, 1 };
-      new_path->velocity_datapoints[2] = { new_path->length * 0.9f, 1 };
-      new_path->velocity_datapoints[3] = { new_path->length, 0 };
+      new_path->data.velocity_datapoint_count = 4;
+      new_path->data.velocity_datapoints = PushArray(&state->project_arena, North_PathDataPoint, 4);
+      new_path->data.velocity_datapoints[0] = { 0, 0 };
+      new_path->data.velocity_datapoints[1] = { new_path->length * 0.1f, 1 };
+      new_path->data.velocity_datapoints[2] = { new_path->length * 0.9f, 1 };
+      new_path->data.velocity_datapoints[3] = { new_path->length, 0 };
       RecalculateAutoPathTime(new_path);
 
       AutoPath **new_out_paths = PushArray(&state->project_arena, AutoPath *, selected_node->path_count + 1);
@@ -317,42 +458,41 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
    });
 
    if(Button(available_command_list, "Wait", menu_button).clicked) {
-      AutoCommand new_command = {};
-      new_command.type = North_CommandType::Wait;
-      new_command.wait.duration = 0;
+      AutoCommand *new_command = PushStruct(&state->project_arena, AutoCommand);
+      new_command->type = North_CommandType::Wait;
+      new_command->wait.duration = 0;
       
       selected_node->commands =
-         ArrayInsert(&state->project_arena, AutoCommand, selected_node->commands,
-                     0, &new_command, selected_node->command_count++);
+         ArrayInsert(&state->project_arena, AutoCommand *, selected_node->commands,
+                     selected_node->command_count - 1, &new_command, selected_node->command_count++);
    }
 
-   if(Button(available_command_list, "Pivot", menu_button).clicked) {
-      AutoCommand new_command = {};
-      new_command.type = North_CommandType::Pivot;
-      new_command.pivot.continuous_event_count = 0;
-      new_command.pivot.discrete_event_count = 0;
-      new_command.pivot.dest_angle = 0;
-      new_command.pivot.velocity_datapoint_count = 4;
-      new_command.pivot.velocity_datapoints = PushArray(&state->project_arena, North_PathDataPoint, new_command.pivot.velocity_datapoint_count);
+   if(selected_node != state->project->starting_node) {
+      if(Button(available_command_list, "Pivot", menu_button).clicked) {
+         AutoCommand *new_command = PushStruct(&state->project_arena, AutoCommand);
+         new_command->type = North_CommandType::Pivot;
+         new_command->pivot.data.velocity_datapoint_count = 4;
+         new_command->pivot.data.velocity_datapoints = PushArray(&state->project_arena, North_PathDataPoint, new_command->pivot.data.velocity_datapoint_count);
 
-      selected_node->commands =
-         ArrayInsert(&state->project_arena, AutoCommand, selected_node->commands,
-                     0, &new_command, selected_node->command_count++);
+         selected_node->commands =
+            ArrayInsert(&state->project_arena, AutoCommand *, selected_node->commands,
+                        selected_node->command_count - 1, &new_command, selected_node->command_count++);
+      }
    }
 
    ForEachArray(i, subsystem, profile->subsystem_count, profile->subsystems, {
       ForEachArray(j, command, subsystem->command_count, subsystem->commands, {
          if(Button(available_command_list, Concat(subsystem->name, Literal(":"), command->name), menu_button).clicked) {
-            AutoCommand new_command = {};
-            new_command.type = North_CommandType::Generic;
-            new_command.generic.subsystem_name = PushCopy(&state->project_arena, subsystem->name);
-            new_command.generic.command_name = PushCopy(&state->project_arena, command->name);
-            new_command.generic.param_count = command->param_count;
-            new_command.generic.params = PushArray(&state->project_arena, f32, command->param_count);
+            AutoCommand *new_command = PushStruct(&state->project_arena, AutoCommand);
+            new_command->type = North_CommandType::Generic;
+            new_command->generic.subsystem_name = PushCopy(&state->project_arena, subsystem->name);
+            new_command->generic.command_name = PushCopy(&state->project_arena, command->name);
+            new_command->generic.param_count = command->param_count;
+            new_command->generic.params = PushArray(&state->project_arena, f32, command->param_count);
 
             selected_node->commands =
-               ArrayInsert(&state->project_arena, AutoCommand, selected_node->commands,
-                           0, &new_command, selected_node->command_count++); 
+               ArrayInsert(&state->project_arena, AutoCommand *, selected_node->commands,
+                           selected_node->command_count - 1, &new_command, selected_node->command_count++); 
          }
       });
    });
@@ -364,7 +504,8 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
    u32 from_index = 0;
    u32 to_index = 0;
 
-   ForEachArray(i, command, selected_node->command_count, selected_node->commands, {
+   ForEachArray(i, _command, selected_node->command_count, selected_node->commands, {
+      AutoCommand *command = *_command;
       UI_SCOPE(command_list, command);
       element *command_panel = ColumnPanel(command_list, Width(Size(command_list).x).Padding(0, 5).Captures(INTERACTION_DRAG));
       if(IsActive(command_panel)) {
@@ -398,18 +539,6 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
          }
       }
 
-      element *conditional_row = RowPanel(command_panel, Size(Size(command_panel).x, 40));
-      Label(conditional_row, "Conditional", 20, WHITE);
-      CheckBox(conditional_row, &command->has_conditional, V2(15, 15));
-      if(command->has_conditional) {
-         //TODO: replace this with ui_list_selector
-         for(u32 j = 0; j < profile->conditional_count; j++) {
-            if(Button(conditional_row, profile->conditionals[j], menu_button.IsSelected(profile->conditionals[j] == command->conditional)).clicked) {
-               command->conditional = PushCopy(&state->project_arena, profile->conditionals[j]);
-            }
-         }
-      }
-
       switch(command->type) {
          case North_CommandType::Generic: {
             RobotProfileCommand *command_template = GetCommand(profile, command->generic.subsystem_name, command->generic.command_name);
@@ -435,7 +564,7 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
          } break;
          
          case North_CommandType::Pivot: {
-            Label(button_row, Concat(Literal("Pivot to "), ToString(command->pivot.dest_angle)), 20, WHITE);
+            Label(button_row, Concat(Literal("Pivot to "), ToString(command->pivot.end_angle)), 20, WHITE);
             DrawPivotCommandEditor(state, command, command_panel, profile);
          } break;
 
@@ -445,11 +574,11 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
 
    if(remove_command) {
       selected_node->commands =
-               ArrayRemove(&state->project_arena, AutoCommand, selected_node->commands,
+               ArrayRemove(&state->project_arena, AutoCommand *, selected_node->commands,
                            remove_index, selected_node->command_count--); 
    } else if(move_command) {
-      ArrayMove(AutoCommand, selected_node->commands, selected_node->command_count,
-                  from_index, to_index);
+      ArrayMove(AutoCommand *, selected_node->commands, selected_node->command_count,
+                from_index, to_index);
    }
 
    FinalizeLayout(edit_panel);
@@ -488,184 +617,51 @@ void DrawSelectedPath(EditorState *state, ui_field_topdown *field, bool field_cl
    Label(edit_panel, Concat(Literal("Path length: "), ToString(selected_path->length)), 20, WHITE);
    Label(edit_panel, Concat(Literal("Time: "), ToString(selected_path->time)), 20, WHITE);
 
-   element *graph = Panel(edit_panel, Size(Size(edit_panel).x - 10, 300).Padding(5, 5).Captures(INTERACTION_CLICK));
-   Outline(graph, light_grey);
-
-   bool new_velocity_sample = false;
-   u32 new_velocity_sample_i = 0;
-
-   editable_graph_line velocity_line = GraphLine(graph, 0, 20, selected_path->length, selected_path->velocity_datapoints, selected_path->velocity_datapoint_count);
-   for(u32 i = 0; i < selected_path->velocity_datapoint_count; i++) {
-      UI_SCOPE(graph, i);
-      
-      if((i != 0) && (i != (selected_path->velocity_datapoint_count - 1))) {
-         if(GraphHandle(velocity_line, i)) {
-            RecalculateAutoPath(selected_path);
-         }
-      }
-
-      if(i > 0) {
-         v2 point_a = GetGraphPoint(velocity_line, i - 1);
-         v2 point_b = GetGraphPoint(velocity_line, i);
-         
-         Line(graph, GREEN, 2, point_a, point_b);
-         element *new_sample_button = Panel(graph, RectCenterSize(Midpoint(point_a, point_b), V2(5, 5)), Captures(INTERACTION_CLICK));
-         Background(new_sample_button, RED);
-         if(WasClicked(new_sample_button)) {
-            new_velocity_sample = true;
-            new_velocity_sample_i = i;
-         }
-      }
-   }
-
-   if(new_velocity_sample) {
-      North_PathDataPoint new_datapoint = {};
-      new_datapoint.distance = (selected_path->velocity_datapoints[new_velocity_sample_i - 1].distance + selected_path->velocity_datapoints[new_velocity_sample_i].distance) / 2;
-      new_datapoint.value = (selected_path->velocity_datapoints[new_velocity_sample_i - 1].value + selected_path->velocity_datapoints[new_velocity_sample_i].value) / 2;
-      
-      selected_path->velocity_datapoints = 
-                     ArrayInsert(&state->project_arena, North_PathDataPoint, selected_path->velocity_datapoints,
-                                 new_velocity_sample_i, &new_datapoint, selected_path->velocity_datapoint_count++);
-
+   ui_pathlike_editor path_editor = DrawPathlikeDataEditor(state, edit_panel, profile, &selected_path->data, selected_path->length);
+   if(path_editor.recalculate) {
       RecalculateAutoPath(selected_path);
    }
-
-   ForEachArray(i, cevent, selected_path->continuous_event_count, selected_path->continuous_events, {
-      UI_SCOPE(graph, cevent);
-      
-      bool new_sample = false;
-      u32 new_sample_i = 0;
-
-      editable_graph_line curr_line = GraphLine(graph, 0, 20, selected_path->length, cevent->samples, cevent->sample_count);
-      for(u32 i = 0; i < cevent->sample_count; i++) {
-         UI_SCOPE(graph, cevent->samples + i);
-         
-         GraphHandle(curr_line, i);
-
-         if(i == 0) {
-            cevent->samples[i].distance = 0;
-         } else if(i == (cevent->sample_count - 1)) { 
-            cevent->samples[i].distance = selected_path->length;
-         }
-
-         if(i > 0) {
-            v2 point_a = GetGraphPoint(curr_line, i - 1);
-            v2 point_b = GetGraphPoint(curr_line, i);
-            
-            Line(graph, GREEN, 2, point_a, point_b);
-            element *new_sample_button = Panel(graph, RectCenterSize(Midpoint(point_a, point_b), V2(5, 5)), Captures(INTERACTION_CLICK));
-            Background(new_sample_button, RED);
-            if(WasClicked(new_sample_button)) {
-               new_sample = true;
-               new_sample_i = i;
-            }
-         }
-      }
-
-      if(new_sample) {
-         North_PathDataPoint new_datapoint = {};
-         new_datapoint.distance = (cevent->samples[new_sample_i - 1].distance + cevent->samples[new_sample_i].distance) / 2;
-         new_datapoint.value = (cevent->samples[new_sample_i - 1].value + cevent->samples[new_sample_i].value) / 2;
-         
-         cevent->samples = ArrayInsert(&state->project_arena, North_PathDataPoint, cevent->samples,
-                                       new_sample_i, &new_datapoint, cevent->sample_count++);
-
-         RecalculateAutoPath(selected_path);
-      }
-   });
-
-   bool remove_devent = false;
-   u32 remove_devent_i = 0;
-   ForEachArray(i, devent, selected_path->discrete_event_count, selected_path->discrete_events, {
-      RobotProfileCommand *command_template = GetCommand(profile, devent->subsystem_name, devent->command_name);
-      Assert(command_template);
-      
-      UI_SCOPE(edit_panel, devent);
-      element *command_panel = ColumnPanel(edit_panel, Width(Size(edit_panel).x).Padding(0, 5).Captures(INTERACTION_DRAG));
-      
-      element *button_row = RowPanel(command_panel, Size(Size(command_panel).x, page_tab_height)); 
-      if(Button(button_row, "Delete", menu_button).clicked) {
-         remove_devent = true;
-         remove_devent_i = i;
-      }
-
-      string text = Concat(devent->subsystem_name, Literal(":"), devent->command_name, Literal("@"), ToString(devent->distance));
-      Label(command_panel, text, 20, WHITE);
-      for(u32 j = 0; j < command_template->param_count; j++) {
-         f32 *param_value = devent->params + j;
-         UI_SCOPE(command_panel->context, param_value);
-         
-         element *param_row = RowPanel(command_panel, Size(Size(command_panel).x, 20)); 
-         Label(param_row, command_template->params[j], 20, WHITE);
-         TextBox(param_row, param_value, 20);
-      }
-
-      HorizontalSlider(command_panel, &devent->distance, 0, selected_path->length, V2(Size(command_panel).x, 20));
-   });
-
-   if(remove_devent) {
-      selected_path->discrete_events =
-         ArrayRemove(&state->project_arena, AutoDiscreteEvent, selected_path->discrete_events,
-                     remove_devent_i, selected_path->discrete_event_count--);
-   }
-   
-   for(u32 i = 0; i < profile->subsystem_count; i++) {
-      RobotProfileSubsystem *subsystem = profile->subsystems + i;
-      
-      for(u32 j = 0; j < subsystem->command_count; j++) {
-         RobotProfileCommand *command = subsystem->commands + j;
-         
-         if(command->type == North_CommandExecutionType::Continuous) {
-            bool already_has_line = false;
-
-            for(u32 k = 0; k < selected_path->continuous_event_count; k++) {
-               AutoContinuousEvent *cevent = selected_path->continuous_events + k;
-               if((cevent->subsystem_name == subsystem->name) && (cevent->command_name == command->name)) {
-                  already_has_line = true;
-                  break;
-               }
-            }
-
-            if(!already_has_line) {
-               if(Button(edit_panel, Concat(Literal("C "), subsystem->name, Literal(":"), command->name), menu_button).clicked) {
-                  AutoContinuousEvent new_cevent = {};
-                  new_cevent.subsystem_name = PushCopy(&state->project_arena, subsystem->name);
-                  new_cevent.command_name = PushCopy(&state->project_arena, command->name);
-                  new_cevent.sample_count = 3;
-                  new_cevent.samples = PushArray(&state->project_arena, North_PathDataPoint, new_cevent.sample_count);
-
-                  new_cevent.samples[0] = { 0, 0 };
-                  new_cevent.samples[1] = { selected_path->length * 0.5f, 5 };
-                  new_cevent.samples[2] = { selected_path->length, 10 };
-
-                  selected_path->continuous_events = 
-                     ArrayInsert(&state->project_arena, AutoContinuousEvent, selected_path->continuous_events,
-                                 0, &new_cevent, selected_path->continuous_event_count++);
-               }
-            }
-         } else if(command->type == North_CommandExecutionType::NonBlocking) {
-            if(Button(edit_panel, Concat(Literal("D "), subsystem->name, Literal(":"), command->name), menu_button).clicked) {
-               AutoDiscreteEvent new_event = {};
-               new_event.subsystem_name = PushCopy(&state->project_arena, subsystem->name);
-               new_event.command_name = PushCopy(&state->project_arena, command->name);
-               new_event.param_count = command->param_count;
-               new_event.params = PushArray(&state->project_arena, f32, command->param_count);
-               
-               selected_path->discrete_events = 
-                  ArrayInsert(&state->project_arena, AutoDiscreteEvent, selected_path->discrete_events,
-                              0, &new_event, selected_path->discrete_event_count++);
-            }
-         }
-      };
-   };
 
    FinalizeLayout(edit_panel);
 
    //NOTE: this has to be after FinalizeLayout because graph->bounds isnt valid until after
-   if(IsHot(graph)) {
-      f32 cursor_d = selected_path->length * ((Cursor(graph) - graph->bounds.min).x / Size(graph).x);
-      Text(graph, Concat(Literal("Distance="), ToString(cursor_d)), graph->bounds.min, 20, WHITE);
+   if(IsHot(path_editor.graph)) {
+      f32 cursor_d = selected_path->length * ((Cursor(path_editor.graph) - path_editor.graph->bounds.min).x / Size(path_editor.graph).x);
+      Text(path_editor.graph, Concat(Literal("Distance="), ToString(cursor_d)), path_editor.graph->bounds.min, 20, WHITE);
       Rectangle(field->e, RectCenterSize(GetPoint(field, GetAutoPathPoint(selected_path, cursor_d)), V2(5, 5)), BLACK);
+   }
+
+   bool point_clicked = false;
+   u32 point_index = 0;   
+
+   for(u32 i = 0; i < selected_path->control_point_count; i++) {
+      North_HermiteControlPoint *point = selected_path->control_points + i;
+      UI_SCOPE(field->e->context, point);
+      element *handle = Panel(field->e, RectCenterSize(GetPoint(field, point->pos), V2(10, 10)), Captures(INTERACTION_DRAG | INTERACTION_CLICK));
+      
+      Background(handle, RED);
+      if(IsHot(handle)) {
+         Outline(handle, BLACK);
+      }
+
+      if((state->path_edit == RemoveControlPoint) && WasClicked(handle)) {
+         point_clicked = true;
+         point_index = i;
+      }
+
+      v2 drag_vector = GetDrag(handle);
+      point->pos = ClampTo(point->pos + PixelsToFeet(field, drag_vector),
+                           RectCenterSize(V2(0, 0), field->size_in_ft));
+
+      if(Length(drag_vector) > 0)
+         RecalculateAutoPath(selected_path);
+   }
+
+   if(point_clicked) {
+      selected_path->control_points = 
+         ArrayRemove(&state->project_arena, North_HermiteControlPoint, selected_path->control_points, 
+                     point_index, selected_path->control_point_count--);
+      RecalculateAutoPath(selected_path);
    }
 
    switch(state->path_edit) {
@@ -756,6 +752,7 @@ void DrawEditingView(element *page, EditorState *state) {
    Background(resize_divider, dark_grey);
    field_width += GetDrag(resize_divider).y * (field.size_in_ft.x / field.size_in_ft.y);
 
+   RecalculateAutoNode(state->project->starting_node);
    DrawNode(&field, state, state->project->starting_node, false);
    
    InputState *input = &page->context->input_state;

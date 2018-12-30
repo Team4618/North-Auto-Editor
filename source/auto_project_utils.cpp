@@ -9,6 +9,7 @@ struct AutoContinuousEvent {
    string command_name;
    u32 sample_count;
    North_PathDataPoint *samples;
+   bool hidden;
 };
 
 struct AutoDiscreteEvent {
@@ -19,11 +20,20 @@ struct AutoDiscreteEvent {
    f32 *params;
 };
 
+struct AutoPathlikeData {
+   u32 velocity_datapoint_count;
+   North_PathDataPoint *velocity_datapoints;
+
+   u32 continuous_event_count;
+   AutoContinuousEvent *continuous_events;
+
+   u32 discrete_event_count;
+   AutoDiscreteEvent *discrete_events;
+};
+
 struct AutoCommand {
    North_CommandType::type type;
-   bool has_conditional;
-   string conditional;
-
+   
    union {
       struct {
          string subsystem_name;
@@ -37,16 +47,17 @@ struct AutoCommand {
       } wait;
 
       struct {
-         f32 dest_angle;
+         f32 start_angle;
+         
+         // bool path_tangent_end_angle;
+         // union {
+            f32 end_angle; //NOTE: path_tangent_end_angle == false
+            // u32 path_index; //NOTE: path_tangent_end_angle == true
+         // };
+         
+         bool turns_clockwise;
 
-         u32 velocity_datapoint_count;
-         North_PathDataPoint *velocity_datapoints;
-
-         u32 continuous_event_count;
-         AutoContinuousEvent *continuous_events;
-
-         u32 discrete_event_count;
-         AutoDiscreteEvent *discrete_events;
+         AutoPathlikeData data;
       } pivot;
    };
 };
@@ -57,7 +68,7 @@ struct AutoNode {
    AutoPath *in_path;
 
    u32 command_count;
-   AutoCommand *commands;
+   AutoCommand **commands;
    
    u32 path_count;
    AutoPath **out_paths;
@@ -71,10 +82,13 @@ struct AutoPath_LenLeaf {
 struct AutoPath_LenBranch {
    f32 len;
 
+   f32 greater_value;
+   f32 less_value;
+
    union {
       struct {
-         AutoPath_LenLeaf *greater_leaf;
-         AutoPath_LenLeaf *less_leaf;
+         u32 greater_leaf;
+         u32 less_leaf;
       };
 
       struct {
@@ -92,10 +106,13 @@ struct AutoPath_TimeLeaf {
 struct AutoPath_TimeBranch {
    f32 time;
 
+   f32 greater_value;
+   f32 less_value;
+
    union {
       struct {
-         AutoPath_TimeLeaf *greater_leaf;
-         AutoPath_TimeLeaf *less_leaf;
+         u32 greater_leaf;
+         u32 less_leaf;
       };
 
       struct {
@@ -128,14 +145,7 @@ struct AutoPath {
    bool has_conditional;
    string conditional;
 
-   u32 velocity_datapoint_count;
-   North_PathDataPoint *velocity_datapoints;
-
-   u32 continuous_event_count;
-   AutoContinuousEvent *continuous_events;
-
-   u32 discrete_event_count;
-   AutoDiscreteEvent *discrete_events;
+   AutoPathlikeData data;
 
    u32 control_point_count;
    North_HermiteControlPoint *control_points;
@@ -144,10 +154,13 @@ struct AutoPath {
    MemoryArena length_to_pos_memory;
    f32 length;
    AutoPath_LenBranch *len_root;
+   AutoPath_LenBranch *len_layers[sample_exp];
+   AutoPath_LenLeaf *len_samples;
 
    MemoryArena time_to_length_memory;
    f32 time;
    AutoPath_TimeBranch *time_root;
+   AutoPath_TimeLeaf *time_samples;
 };
 
 struct AutoProjectLink {
@@ -194,7 +207,7 @@ void RecalculateAutoPathLength(AutoPath *path) {
    u32 sample_count = Power(2, sample_exp); 
    AutoPath_LenLeaf *samples = PushArray(arena, AutoPath_LenLeaf, sample_count);
    AutoPathSpline spline = GetAutoPathSpline(path);
-   f32 step = (f32)(spline.point_count - 1) / (f32)sample_count;
+   f32 step = (f32)(spline.point_count - 1) / (f32)(sample_count - 1);
    
    samples[0].len = 0;
    samples[0].pos = spline.points[0].pos;
@@ -212,6 +225,7 @@ void RecalculateAutoPathLength(AutoPath *path) {
       samples[i].len = length;
       samples[i].pos = pos;
    }
+   path->len_samples = samples;
    path->length = length;
 
    u32 last_layer_count = Power(2, sample_exp - 1);
@@ -220,10 +234,15 @@ void RecalculateAutoPathLength(AutoPath *path) {
       AutoPath_LenLeaf *less = samples + (2 * i);
       AutoPath_LenLeaf *greater = samples + (2 * i + 1);
 
-      last_layer[i].less_leaf = less;
-      last_layer[i].greater_leaf = greater;
+      last_layer[i].less_leaf = 2 * i;
+      last_layer[i].less_value = less->len;
+      last_layer[i].greater_leaf = 2 * i + 1;
+      last_layer[i].greater_value = greater->len;
       last_layer[i].len = (less->len + greater->len) / 2;
    }
+   
+   u32 debug_layer_i = 0;
+   path->len_layers[debug_layer_i++] = last_layer;
 
    for(u32 i = 1; i < sample_exp; i++) {
       u32 layer_count = Power(2, sample_exp - i - 1);
@@ -234,21 +253,24 @@ void RecalculateAutoPathLength(AutoPath *path) {
          AutoPath_LenBranch *greater = last_layer + (2 * i + 1);
 
          curr_layer[i].less_branch = less;
+         curr_layer[i].less_value = less->less_value;
          curr_layer[i].greater_branch = greater;
-         curr_layer[i].len = (less->len + greater->len) / 2;
+         curr_layer[i].greater_value = greater->greater_value;
+         curr_layer[i].len = (less->greater_value + greater->less_value) / 2;
       }
 
       last_layer_count = layer_count;
       last_layer = curr_layer;
+      path->len_layers[debug_layer_i++] = last_layer;
    }
 
    path->len_root = last_layer;
 }
 
 f32 GetVelocityAt(AutoPath *path, f32 distance) {
-   for(u32 i = 1; i < path->velocity_datapoint_count; i++) {
-      North_PathDataPoint a = path->velocity_datapoints[i - 1];
-      North_PathDataPoint b = path->velocity_datapoints[i];
+   for(u32 i = 1; i < path->data.velocity_datapoint_count; i++) {
+      North_PathDataPoint a = path->data.velocity_datapoints[i - 1];
+      North_PathDataPoint b = path->data.velocity_datapoints[i];
       if((a.distance <= distance) && (distance <= b.distance)) {
          f32 t = (distance - a.distance) / (b.distance - a.distance);
          return lerp(a.value, t, b.value);
@@ -259,11 +281,13 @@ f32 GetVelocityAt(AutoPath *path, f32 distance) {
 }
 
 void RecalculateAutoPathTime(AutoPath *path) {
-   Assert(path->velocity_datapoint_count > 2);
-   path->velocity_datapoints[0].distance = 0;
-   path->velocity_datapoints[path->velocity_datapoint_count - 1].distance = path->length;
-   for(u32 i = 0; i < path->velocity_datapoint_count; i++) {
-      path->velocity_datapoints[i].distance = Min(path->velocity_datapoints[i].distance, path->length);
+   Assert(path->data.velocity_datapoint_count >= 2);
+   path->data.velocity_datapoints[0].distance = 0;
+   path->data.velocity_datapoints[0].value = 0;
+   path->data.velocity_datapoints[path->data.velocity_datapoint_count - 1].distance = path->length;
+   path->data.velocity_datapoints[path->data.velocity_datapoint_count - 1].value = 0;
+   for(u32 i = 0; i < path->data.velocity_datapoint_count; i++) {
+      path->data.velocity_datapoints[i].distance = Min(path->data.velocity_datapoints[i].distance, path->length);
    }
 
    MemoryArena *arena = &path->time_to_length_memory;
@@ -292,8 +316,10 @@ void RecalculateAutoPathTime(AutoPath *path) {
       AutoPath_TimeLeaf *less = samples + (2 * i);
       AutoPath_TimeLeaf *greater = samples + (2 * i + 1);
 
-      last_layer[i].less_leaf = less;
-      last_layer[i].greater_leaf = greater;
+      last_layer[i].less_leaf = 2 * i;
+      last_layer[i].less_value = less->time;
+      last_layer[i].greater_leaf = 2 * i + 1;
+      last_layer[i].greater_value = greater->time;
       last_layer[i].time = (less->time + greater->time) / 2;
    }
 
@@ -306,8 +332,10 @@ void RecalculateAutoPathTime(AutoPath *path) {
          AutoPath_TimeBranch *greater = last_layer + (2 * i + 1);
 
          curr_layer[i].less_branch = less;
+         curr_layer[i].less_value = less->less_value;
          curr_layer[i].greater_branch = greater;
-         curr_layer[i].time = (less->time + greater->time) / 2;
+         curr_layer[i].greater_value = greater->greater_value;
+         curr_layer[i].time = (less->greater_value + greater->less_value) / 2;
       }
 
       last_layer_count = layer_count;
@@ -320,24 +348,111 @@ void RecalculateAutoPathTime(AutoPath *path) {
 void RecalculateAutoPath(AutoPath *path) {
    RecalculateAutoPathLength(path);
    RecalculateAutoPathTime(path);
+
+   ForEachArray(j, cevent, path->data.continuous_event_count, path->data.continuous_events, {
+      cevent->samples[0].distance = 0;
+      cevent->samples[cevent->sample_count - 1].distance = path->length;
+      for(u32 k = 0; k < cevent->sample_count; k++) {
+         cevent->samples[k].distance = Min(cevent->samples[k].distance, path->length);
+      }
+   });
+
+   ForEachArray(j, devent, path->data.discrete_event_count, path->data.discrete_events, {
+      devent->distance = Clamp(0, path->length, devent->distance);
+   });
 }
 
+//TODO: fix the two below
 v2 GetAutoPathPoint(AutoPath *path, f32 distance) {
+   u32 sample_count = Power(2, sample_exp);
    AutoPath_LenBranch *branch = path->len_root;
    for(u32 i = 0; i < (sample_exp - 1); i++) {
       branch = (distance > branch->len) ? branch->greater_branch : branch->less_branch;
    }
-   f32 t = (distance - branch->less_leaf->len) / (branch->greater_leaf->len - branch->less_leaf->len); 
-   return lerp(branch->less_leaf->pos, t, branch->greater_leaf->pos);
+
+   u32 a_i;
+   u32 b_i;
+
+   u32 center_leaf_i = (distance > branch->len) ? branch->greater_leaf : branch->less_leaf;
+   if(distance > path->len_samples[center_leaf_i].len) {
+      a_i = Clamp(0, sample_count - 1, center_leaf_i);
+      b_i = Clamp(0, sample_count - 1, center_leaf_i + 1);
+   } else {
+      a_i = Clamp(0, sample_count - 1, center_leaf_i - 1);
+      b_i = Clamp(0, sample_count - 1, center_leaf_i);
+   }
+
+   AutoPath_LenLeaf *leaf_a = path->len_samples + a_i;
+   AutoPath_LenLeaf *leaf_b = path->len_samples + b_i;
+
+   f32 t = (distance - leaf_a->len) / (leaf_b->len - leaf_a->len); 
+   return lerp(leaf_a->pos, t, leaf_b->pos);
 }
 
 f32 GetAutoPathDistForTime(AutoPath *path, f32 time) {
+   u32 sample_count = Power(2, sample_exp);
    AutoPath_TimeBranch *branch = path->time_root;
    for(u32 i = 0; i < (sample_exp - 1); i++) {
       branch = (time > branch->time) ? branch->greater_branch : branch->less_branch;
    }
-   f32 t = (time - branch->less_leaf->time) / (branch->greater_leaf->time - branch->less_leaf->time); 
-   return lerp(branch->less_leaf->len, t, branch->greater_leaf->len);
+
+   u32 a_i;
+   u32 b_i;
+
+   u32 center_leaf_i = (time > branch->time) ? branch->greater_leaf : branch->less_leaf;
+   if(time > path->time_samples[center_leaf_i].time) {
+      a_i = Clamp(0, sample_count - 1, center_leaf_i);
+      b_i = Clamp(0, sample_count - 1, center_leaf_i + 1);
+   } else {
+      a_i = Clamp(0, sample_count - 1, center_leaf_i - 1);
+      b_i = Clamp(0, sample_count - 1, center_leaf_i);
+   }
+
+   AutoPath_TimeLeaf *leaf_a = path->time_samples + a_i;
+   AutoPath_TimeLeaf *leaf_b = path->time_samples + b_i;
+
+   f32 t = (time - leaf_a->time) / (leaf_b->time - leaf_a->time); 
+   return lerp(leaf_a->time, t, leaf_b->time);
+}
+
+void RecalculateAutoNode(AutoNode *node) {
+   if(node->in_path != NULL) {
+      f32 start_angle = Angle(node->in_path->out_tangent);
+      for(u32 i = 0; i < node->command_count; i++) {
+         AutoCommand *command = node->commands[i];
+         if(command->type == North_CommandType::Pivot) {
+            command->pivot.start_angle = start_angle;
+            f32 pivot_length = abs(AngleBetween(command->pivot.start_angle, command->pivot.end_angle, command->pivot.turns_clockwise));
+
+            Assert(command->pivot.data.velocity_datapoint_count >= 2);
+            command->pivot.data.velocity_datapoints[0].distance = 0;
+            command->pivot.data.velocity_datapoints[0].value = 0;
+            command->pivot.data.velocity_datapoints[command->pivot.data.velocity_datapoint_count - 1].distance = pivot_length;
+            command->pivot.data.velocity_datapoints[command->pivot.data.velocity_datapoint_count - 1].value = 0;
+            for(u32 j = 0; j < command->pivot.data.velocity_datapoint_count; j++) {
+               command->pivot.data.velocity_datapoints[j].distance = Min(command->pivot.data.velocity_datapoints[j].distance, pivot_length);
+            }
+
+            ForEachArray(j, cevent, command->pivot.data.continuous_event_count, command->pivot.data.continuous_events, {
+               cevent->samples[0].distance = 0;
+               cevent->samples[cevent->sample_count - 1].distance = pivot_length;
+               for(u32 k = 0; k < cevent->sample_count; k++) {
+                  cevent->samples[k].distance = Min(cevent->samples[k].distance, pivot_length);
+               }
+            });
+
+            ForEachArray(j, devent, command->pivot.data.discrete_event_count, command->pivot.data.discrete_events, {
+               devent->distance = Clamp(0, pivot_length, devent->distance);
+            });
+
+            start_angle = command->pivot.end_angle;
+         }
+      }
+   }
+
+   for(u32 i = 0; i < node->path_count; i++) {
+      RecalculateAutoNode(node->out_paths[i]->out_node);
+   }
 }
 
 AutoContinuousEvent ParseAutoContinuousEvent(buffer *file, MemoryArena *arena) {
@@ -365,45 +480,46 @@ AutoDiscreteEvent ParseAutoDiscreteEvent(buffer *file, MemoryArena *arena) {
    return result;
 }
 
-AutoCommand ParseAutoCommand(buffer *file, MemoryArena *arena) {
-   AutoCommand result = {};
+AutoCommand *ParseAutoCommand(buffer *file, MemoryArena *arena) {
+   AutoCommand *result = PushStruct(arena, AutoCommand);
    
    AutonomousProgram_CommandHeader *header = ConsumeStruct(file, AutonomousProgram_CommandHeader);
-   result.type = (North_CommandType::type) header->type;
-   result.conditional = PushCopy(arena, ConsumeString(file, header->conditional_length));
+   result->type = (North_CommandType::type) header->type;
    
-   switch(result.type) {
+   switch(result->type) {
       case North_CommandType::Generic: {
          AutonomousProgram_CommandBody_Generic *body = ConsumeStruct(file, AutonomousProgram_CommandBody_Generic);
-         result.generic.subsystem_name = PushCopy(arena, ConsumeString(file, body->subsystem_name_length));
-         result.generic.command_name = PushCopy(arena, ConsumeString(file, body->command_name_length));
-         result.generic.param_count = body->parameter_count;
-         result.generic.params = ConsumeAndCopyArray(arena, file, f32, body->parameter_count);
+         result->generic.subsystem_name = PushCopy(arena, ConsumeString(file, body->subsystem_name_length));
+         result->generic.command_name = PushCopy(arena, ConsumeString(file, body->command_name_length));
+         result->generic.param_count = body->parameter_count;
+         result->generic.params = ConsumeAndCopyArray(arena, file, f32, body->parameter_count);
       } break;
 
       case North_CommandType::Wait: {
          AutonomousProgram_CommandBody_Wait *body = ConsumeStruct(file, AutonomousProgram_CommandBody_Wait);
-         result.wait.duration = body->duration;
+         result->wait.duration = body->duration;
       } break;
 
       case North_CommandType::Pivot: {
          AutonomousProgram_CommandBody_Pivot *body = ConsumeStruct(file, AutonomousProgram_CommandBody_Pivot);
-         result.pivot.dest_angle = body->dest_angle;
+         result->pivot.start_angle = body->start_angle;
+         result->pivot.end_angle = body->end_angle;
+         result->pivot.turns_clockwise = body->turns_clockwise ? true : false;
 
-         result.pivot.velocity_datapoint_count = body->velocity_datapoint_count;
-         Assert(result.pivot.velocity_datapoint_count > 2);
-         result.pivot.velocity_datapoints = ConsumeAndCopyArray(arena, file, North_PathDataPoint, body->velocity_datapoint_count);
+         result->pivot.data.velocity_datapoint_count = body->velocity_datapoint_count;
+         Assert(result->pivot.data.velocity_datapoint_count >= 2);
+         result->pivot.data.velocity_datapoints = ConsumeAndCopyArray(arena, file, North_PathDataPoint, body->velocity_datapoint_count);
 
-         result.pivot.continuous_event_count = body->continuous_event_count;
-         result.pivot.continuous_events = PushArray(arena, AutoContinuousEvent, body->continuous_event_count);
+         result->pivot.data.continuous_event_count = body->continuous_event_count;
+         result->pivot.data.continuous_events = PushArray(arena, AutoContinuousEvent, body->continuous_event_count);
          for(u32 i = 0; i < body->continuous_event_count; i++) {
-            result.pivot.continuous_events[i] = ParseAutoContinuousEvent(file, arena);
+            result->pivot.data.continuous_events[i] = ParseAutoContinuousEvent(file, arena);
          }
 
-         result.pivot.discrete_event_count = body->discrete_event_count;
-         result.pivot.discrete_events = PushArray(arena, AutoDiscreteEvent, body->discrete_event_count);
+         result->pivot.data.discrete_event_count = body->discrete_event_count;
+         result->pivot.data.discrete_events = PushArray(arena, AutoDiscreteEvent, body->discrete_event_count);
          for(u32 i = 0; i < body->discrete_event_count; i++) {
-            result.pivot.discrete_events[i] = ParseAutoDiscreteEvent(file, arena);
+            result->pivot.data.discrete_events[i] = ParseAutoDiscreteEvent(file, arena);
          }
       } break;
 
@@ -422,7 +538,7 @@ AutoNode *ParseAutoNode(buffer *file, MemoryArena *arena) {
    result->path_count = file_node->path_count;
    result->out_paths = PushArray(arena, AutoPath *, file_node->path_count);
    result->command_count = file_node->command_count;
-   result->commands = PushArray(arena, AutoCommand, result->command_count);
+   result->commands = PushArray(arena, AutoCommand *, result->command_count);
 
    for(u32 i = 0; i < file_node->command_count; i++) {
       result->commands[i] = ParseAutoCommand(file, arena);
@@ -445,6 +561,7 @@ AutoPath *ParseAutoPath(buffer *file, MemoryArena *arena) {
    
    path->in_tangent = file_path->in_tangent;
    path->out_tangent = file_path->out_tangent;
+   path->is_reverse = file_path->is_reverse ? true : false;
 
    if(file_path->conditional_length == 0) {
       path->conditional = EMPTY_STRING;
@@ -457,20 +574,20 @@ AutoPath *ParseAutoPath(buffer *file, MemoryArena *arena) {
    path->control_point_count = file_path->control_point_count;
    path->control_points = ConsumeAndCopyArray(arena, file, North_HermiteControlPoint, file_path->control_point_count);
    
-   path->velocity_datapoint_count = file_path->velocity_datapoint_count;
-   Assert(path->velocity_datapoint_count > 2);
-   path->velocity_datapoints = ConsumeAndCopyArray(arena, file, North_PathDataPoint, file_path->velocity_datapoint_count);
+   path->data.velocity_datapoint_count = file_path->velocity_datapoint_count;
+   Assert(path->data.velocity_datapoint_count >= 2);
+   path->data.velocity_datapoints = ConsumeAndCopyArray(arena, file, North_PathDataPoint, file_path->velocity_datapoint_count);
 
-   path->continuous_event_count = file_path->continuous_event_count;
-   path->continuous_events = PushArray(arena, AutoContinuousEvent, path->continuous_event_count);
+   path->data.continuous_event_count = file_path->continuous_event_count;
+   path->data.continuous_events = PushArray(arena, AutoContinuousEvent, path->data.continuous_event_count);
    for(u32 i = 0; i < file_path->continuous_event_count; i++) {
-      path->continuous_events[i] = ParseAutoContinuousEvent(file, arena);
+      path->data.continuous_events[i] = ParseAutoContinuousEvent(file, arena);
    }
 
-   path->discrete_event_count = file_path->discrete_event_count;
-   path->discrete_events = PushArray(arena, AutoDiscreteEvent, path->discrete_event_count);
+   path->data.discrete_event_count = file_path->discrete_event_count;
+   path->data.discrete_events = PushArray(arena, AutoDiscreteEvent, path->data.discrete_event_count);
    for(u32 i = 0; i < file_path->discrete_event_count; i++) {
-      path->discrete_events[i] = ParseAutoDiscreteEvent(file, arena);
+      path->data.discrete_events[i] = ParseAutoDiscreteEvent(file, arena);
    }
 
    path->length_to_pos_memory = PlatformAllocArena(GetMapMemorySize());
@@ -545,12 +662,8 @@ void WriteAutoDiscreteEvent(buffer *file, AutoDiscreteEvent *event) {
 void WriteAutoCommand(buffer *file, AutoCommand *command) {
    WriteStructData(file, AutonomousProgram_CommandHeader, header, {
       header.type = (u8) command->type;
-      header.conditional_length = command->has_conditional ? command->conditional.length : 0;
    });
    
-   if(command->has_conditional)
-      WriteString(file, command->conditional);
-
    switch(command->type) {
       case North_CommandType::Generic: {
          WriteStructData(file, AutonomousProgram_CommandBody_Generic, body, {
@@ -571,17 +684,20 @@ void WriteAutoCommand(buffer *file, AutoCommand *command) {
 
       case North_CommandType::Pivot: {
          WriteStructData(file, AutonomousProgram_CommandBody_Pivot, body, {
-            body.dest_angle = command->pivot.dest_angle;
-            body.velocity_datapoint_count = command->pivot.velocity_datapoint_count;
-            body.continuous_event_count = command->pivot.continuous_event_count;
-            body.discrete_event_count = command->pivot.discrete_event_count;
+            body.start_angle = command->pivot.start_angle;
+            body.end_angle = command->pivot.end_angle;
+            body.turns_clockwise = command->pivot.turns_clockwise;
+            
+            body.velocity_datapoint_count = command->pivot.data.velocity_datapoint_count;
+            body.continuous_event_count = command->pivot.data.continuous_event_count;
+            body.discrete_event_count = command->pivot.data.discrete_event_count;
          });
          
-         WriteArray(file, command->pivot.velocity_datapoints, command->pivot.velocity_datapoint_count);
-         ForEachArray(i, event, command->pivot.continuous_event_count, command->pivot.continuous_events, {
+         WriteArray(file, command->pivot.data.velocity_datapoints, command->pivot.data.velocity_datapoint_count);
+         ForEachArray(i, event, command->pivot.data.continuous_event_count, command->pivot.data.continuous_events, {
             WriteAutoContinuousEvent(file, event);
          });
-         ForEachArray(i, event, command->pivot.discrete_event_count, command->pivot.discrete_events, {
+         ForEachArray(i, event, command->pivot.data.discrete_event_count, command->pivot.data.discrete_events, {
             WriteAutoDiscreteEvent(file, event);
          });
       } break;
@@ -597,7 +713,7 @@ void WriteAutoNode(buffer *file, AutoNode *node) {
    });
 
    ForEachArray(i, command, node->command_count, node->commands, {
-      WriteAutoCommand(file, command);
+      WriteAutoCommand(file, *command);
    });
 
    ForEachArray(i, path, node->path_count, node->out_paths, {
@@ -614,9 +730,9 @@ void WriteAutoPath(buffer *file, AutoPath *path) {
       path_header.conditional_length = path->has_conditional ? path->conditional.length : 0;
       path_header.control_point_count = path->control_point_count;
 
-      path_header.velocity_datapoint_count = path->velocity_datapoint_count;
-      path_header.continuous_event_count = path->continuous_event_count;
-      path_header.discrete_event_count = path->discrete_event_count;
+      path_header.velocity_datapoint_count = path->data.velocity_datapoint_count;
+      path_header.continuous_event_count = path->data.continuous_event_count;
+      path_header.discrete_event_count = path->data.discrete_event_count;
    });
 
    if(path->has_conditional)
@@ -624,11 +740,11 @@ void WriteAutoPath(buffer *file, AutoPath *path) {
    
    WriteArray(file, path->control_points, path->control_point_count);
    
-   WriteArray(file, path->velocity_datapoints, path->velocity_datapoint_count);
-   ForEachArray(i, event, path->continuous_event_count, path->continuous_events, {
+   WriteArray(file, path->data.velocity_datapoints, path->data.velocity_datapoint_count);
+   ForEachArray(i, event, path->data.continuous_event_count, path->data.continuous_events, {
       WriteAutoContinuousEvent(file, event);
    });
-   ForEachArray(i, event, path->discrete_event_count, path->discrete_events, {
+   ForEachArray(i, event, path->data.discrete_event_count, path->data.discrete_events, {
       WriteAutoDiscreteEvent(file, event);
    });
 

@@ -428,6 +428,22 @@ f32 ToRadians(f32 d) {
    return d * (PI32 / 180);
 }
 
+f32 AngleBetween(f32 angle1, f32 angle2, bool clockwise) {
+   if(angle2 > angle1) {
+      return clockwise ? (angle2 - angle1 - 360) : (angle2 - angle1);
+   } else {
+      return clockwise ? (angle2 - angle1) : (angle2 - angle1 + 360);
+   }
+}
+
+bool IsClockwiseShorter(f32 angle1, f32 angle2) {
+   if(angle2 > angle1) {
+      return abs(angle2 - angle1 - 360) < abs(angle2 - angle1);
+   } else {
+      return abs(angle2 - angle1) < abs(angle2 - angle1 + 360);
+   }
+}
+
 union v4 {
    struct { f32 r, g, b, a; };
    struct { f32 x, y, z, w; };
@@ -583,6 +599,34 @@ v2 CubicHermiteSplineTangent(v2 a_pos, v2 a_tan, v2 b_pos, v2 b_tan, f32 t) {
           (3*t*t - 4*t + 1)*a_tan + 
           (6*t - 6*t*t)*b_pos + 
           (3*t*t - 2*t)*b_tan;
+}
+
+union v3 {
+   struct { f32 r, g, b; };
+   struct { f32 x, y, z; };
+   f32 e[3];
+};
+
+v3 V3(f32 x, f32 y, f32 z) {
+   v3 result = {x, y, z};
+   return result;
+}
+
+v3 operator/ (v3 v, f32 s) {
+	v3 output = {};
+	output.x = v.x / s;
+	output.y = v.y / s;
+   output.z = v.z / s;
+	return output;
+}
+
+f32 Length(v3 a) { 
+   return sqrtf(a.x * a.x + a.y * a.y + a.z * a.z); 
+}
+
+v3 Normalize(v3 v) {
+   f32 len = Length(v);
+   return (len == 0) ? V3(0, 0, 0) : (v / len);
 }
 
 struct rect2 {

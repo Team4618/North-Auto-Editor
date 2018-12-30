@@ -159,7 +159,9 @@ struct UIContext {
    persistent_hash_link *persistent_hash[128];
   
    ui_id hot_e;
+   v2 local_cursor;
    ui_id new_hot_e;
+   v2 new_local_cursor;
 
    ui_id last_active_e;
    ui_id active_e;
@@ -279,7 +281,9 @@ struct _ui_scope {
 
 element *beginFrame(v2 window_size, UIContext *context, f32 dt) {
    context->hot_e = context->new_hot_e;
+   context->local_cursor = context->new_local_cursor;
    context->new_hot_e = NULL_UI_ID;
+   context->new_local_cursor = V2(0, 0);
 
    context->last_active_e = context->active_e;
    context->active_e = context->new_active_e;
@@ -290,7 +294,7 @@ element *beginFrame(v2 window_size, UIContext *context, f32 dt) {
    
    context->dragged_e = context->new_dragged_e;
    context->drag = context->new_drag;
-   context->new_clicked_e = NULL_UI_ID;
+   context->new_dragged_e = NULL_UI_ID;
    context->new_drag = V2(0, 0);
 
    context->vscroll_e = context->new_vscroll_e;
@@ -397,6 +401,36 @@ void Outline(element *e, rect2 b, v4 colour, f32 thickness = 2) {
 
 void Outline(element *e, v4 colour, f32 thickness = 2) {
    Outline(e, e->bounds, colour, thickness);
+}
+
+void Circle(element *e, v2 center, f32 radius, v4 colour, f32 thickness = 2) {
+   u32 point_count = 20;
+   v2 *points = PushTempArray(v2, point_count);
+   for(u32 i = 0; i < point_count; i++) {
+      f32 angle = i * (360.0f / (f32)point_count);
+      points[i] = center + radius * V2(cosf(ToRadians(angle)), -sinf(ToRadians(angle)));
+   }
+   _Line(e, colour, thickness, points, point_count, true);
+}
+
+void Arc(element *e, v2 center, f32 radius, f32 angle1, f32 angle2, bool clockwise, v4 colour, f32 thickness = 2) {
+   f32 abetween = AngleBetween(angle1, angle2, clockwise);
+   u32 point_count = 20;
+   v2 *points = PushTempArray(v2, point_count);
+   for(u32 i = 0; i < point_count; i++) {
+      f32 angle = angle1 + i * (abetween / (f32)(point_count - 1));
+      points[i] = center + radius * V2(cosf(ToRadians(angle)), -sinf(ToRadians(angle)));
+   }
+   _Line(e, colour, thickness, points, point_count, false);
+}
+
+v2 DirectionNormal(f32 angle) {
+   return V2(cosf(ToRadians(angle)), 
+             -sinf(ToRadians(angle)));
+}
+
+f32 Angle(v2 v) {
+   return ToDegrees(atan2(-v.y, v.x));
 }
 
 RenderCommand *Texture(element *e, texture tex, rect2 bounds, v4 colour = WHITE) {
@@ -528,6 +562,11 @@ bool IsHot(element *e) {
    return e->id == e->context->hot_e;
 }
 
+v2 GetLocalCursor(element *e) {
+   AssertHasFlags(e->captures, INTERACTION_HOT);
+   return (e->id == e->context->hot_e) ? e->context->local_cursor : V2(0, 0);
+}
+
 bool IsActive(element *e) {
    AssertHasFlags(e->captures, INTERACTION_ACTIVE);
    return e->id == e->context->active_e;
@@ -546,6 +585,10 @@ bool WasClicked(element *e) {
 bool IsSelected(element *e) {
    AssertHasFlags(e->captures, INTERACTION_SELECT);
    return e->id == e->context->selected_e;
+}
+
+void ClearSelected(element *e) {
+   e->context->selected_e = NULL_UI_ID;
 }
 
 v2 GetDrag(element *e) {
@@ -593,6 +636,7 @@ void uiTick(element *e) {
          bool can_become_hot = (context->active_e == NULL_UI_ID) || (context->active_e == e->id);
          if(Contains(e->cliprect, input->pos) && can_become_hot) {
             context->new_hot_e = e->id;
+            context->new_local_cursor = input->pos - e->bounds.min;
          }
       }
 
@@ -605,7 +649,9 @@ void uiTick(element *e) {
       }
 
       if(e->captures & _INTERACTION_CLICK) {
-         if(IsActive(e) && IsHot(e) && input->left_up) {
+         if(IsActive(e) && IsHot(e) && input->left_up && 
+            (e->id != e->context->dragged_e))
+         {
             context->new_clicked_e = e->id;
 
             if(e->captures & _INTERACTION_SELECT) {
@@ -615,9 +661,12 @@ void uiTick(element *e) {
       }
 
       if(e->captures & _INTERACTION_DRAG) {
-         if(IsActive(e)) {
+         v2 drag_vector = input->pos - input->last_pos;
+         if(IsActive(e) && 
+            ((Length(drag_vector) > 0) || (e->id == e->context->dragged_e)))
+         {
             context->new_dragged_e = e->id;
-            context->new_drag = input->pos - input->last_pos;
+            context->new_drag = drag_vector;
          }
       }
 

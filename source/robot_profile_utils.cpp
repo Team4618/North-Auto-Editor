@@ -5,6 +5,7 @@ struct RobotProfileCommand {
    string name;
    u32 param_count;
    string *params;
+   v4 colour;
 };
 
 struct RobotProfileParameter {
@@ -49,6 +50,15 @@ struct RobotProfile {
 
 bool IsValid(RobotProfile *profile) {
    return profile->state != RobotProfileState::Invalid;
+}
+
+v4 ColourForName(string subsystem, string command) {
+   u32 hash = Hash(Concat(subsystem, command));
+   v3 rgb = V3((f32)((hash << 0) & 0xFFFF) / (f32)0xFFFF, 
+               (f32)((hash << 3) & 0xFFFF) / (f32)0xFFFF,
+               (f32)((hash << 5) & 0xFFFF) / (f32)0xFFFF);
+   rgb = Normalize(rgb);
+   return V4(rgb.r, rgb.g, rgb.b, 1);
 }
 
 void EncodeProfileFile(RobotProfile *profile, buffer *file) {
@@ -144,6 +154,7 @@ void RecieveWelcomePacket(RobotProfile *profile, buffer packet) {
          command->type = (North_CommandExecutionType::type) command_desc->type;
          command->param_count = command_desc->param_count;
          command->params = PushArray(arena, string, command->param_count);
+         command->colour = ColourForName(subsystem->name, command->name);
 
          for(u32 k = 0; k < command->param_count; k++) {
             u8 length = *ConsumeStruct(&packet, u8);
@@ -298,6 +309,7 @@ void ParseProfileFile(RobotProfile *profile, buffer file, string name) {
          command->type = (North_CommandExecutionType::type) file_command->type;
          command->param_count = file_command->param_count;
          command->params = PushArray(arena, string, command->param_count);
+         command->colour = ColourForName(subsystem->name, command->name);
 
          for(u32 k = 0; k < file_command->param_count; k++) {
             u8 length = *ConsumeStruct(&file, u8);

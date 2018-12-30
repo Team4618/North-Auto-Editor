@@ -290,9 +290,15 @@ void DrawPath(ui_field_topdown *field, EditorState *state, AutoPath *path) {
    AutoPathSpline path_spline = GetAutoPathSpline(path);
    bool hot = IsHot(field->e) && (MinDistFrom(field, path_spline.points, path_spline.point_count) < 2);
 
-   //TODO: make this better, dont just call "Line" 20 times
+   // for(u32 i = 1; i < path_spline.point_count; i++) {
+   //    North_HermiteControlPoint a = path_spline.points[i - 1];
+   //    North_HermiteControlPoint b = path_spline.points[i];
+   //    CubicHermiteSpline(field, a.pos, a.tangent, b.pos, b.tangent, BLACK);
+   // }
+
+   //TODO: make this better, make a "coloured line" call
    {
-      u32 point_count = 20;
+      u32 point_count = (u32) (path->length * 4);
       f32 step = path->length / (f32)(point_count - 1);
 
       for(u32 i = 1; i < point_count; i++) {
@@ -301,54 +307,28 @@ void DrawPath(ui_field_topdown *field, EditorState *state, AutoPath *path) {
          f32 t_velocity = GetVelocityAt(path, step * i) / 20;
          Line(field->e, hot ? GREEN : lerp(BLUE, t_velocity, RED), 2, GetPoint(field, point_a), GetPoint(field, point_b));
       }
+
+      // for(u32 i = 0; i < point_count; i++) {
+      //    v2 point_b  = GetAutoPathPoint(path, step * i);
+      //    f32 t_velocity = GetVelocityAt(path, step * i) / 20;
+      //    Rectangle(field->e, RectCenterSize(GetPoint(field, point_b), V2(5, 5)), lerp(BLUE, t_velocity, RED));
+      // }
    }
 
-   for(u32 i = 0; i < path->discrete_event_count; i++) {
-      Rectangle(field->e, RectCenterSize(GetPoint(field, GetAutoPathPoint(path, path->discrete_events[i].distance)), V2(5, 5)), BLACK);
-   }
+   // u32 sample_count = Power(2, sample_exp); 
+   // for(u32 i = 0; i < sample_count; i++) {
+   //    Rectangle(field->e, RectCenterSize(GetPoint(field, path->len_samples[i].pos), V2(5, 5)), BLACK);
+   // }
 
-   if((state->selected_type == PathSelected) && (state->selected_path == path) && (state->view == EditorView_Editing)) {
-      bool point_clicked = false;
-      u32 point_index = 0;
-      
-      for(u32 i = 0; i < path->control_point_count; i++) {
-         North_HermiteControlPoint *point = path->control_points + i;
-         UI_SCOPE(field->e->context, point);
-         element *handle = Panel(field->e, RectCenterSize(GetPoint(field, point->pos), V2(10, 10)), Captures(INTERACTION_DRAG | INTERACTION_CLICK));
-         
-         Background(handle, RED);
-         if(IsHot(handle)) {
-            Outline(handle, BLACK);
-         }
-
-         if((state->path_edit == RemoveControlPoint) && WasClicked(handle)) {
-            point_clicked = true;
-            point_index = i;
-         }
-
-         point->pos = ClampTo(point->pos + PixelsToFeet(field, GetDrag(handle)),
-                              RectCenterSize(V2(0, 0), field->size_in_ft));      
-      }
-
-      if(point_clicked) {
-         North_HermiteControlPoint *new_control_points =
-            PushArray(&state->project_arena, North_HermiteControlPoint, path->control_point_count - 1);
-
-         u32 before_count = point_index;
-         Copy(path->control_points, before_count * sizeof(North_HermiteControlPoint), new_control_points);
-         Copy(path->control_points + (point_index + 1), 
-               (path->control_point_count - point_index - 1) * sizeof(North_HermiteControlPoint), new_control_points + before_count);
-               
-         path->control_points = new_control_points;
-         path->control_point_count--;
-         RecalculateAutoPath(path);
-      }
+   for(u32 i = 0; i < path->data.discrete_event_count; i++) {
+      Rectangle(field->e, RectCenterSize(GetPoint(field, GetAutoPathPoint(path, path->data.discrete_events[i].distance)), V2(5, 5)), BLACK);
    }
 
    if(field->clicked && hot) {
       state->selected_type = PathSelected;
       state->selected_path = path;
       state->path_got_selected = true;
+      ClearSelected(field->e);
    }
 
    DrawNode(field, state, path->out_node);
