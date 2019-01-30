@@ -4,6 +4,107 @@
 //    file linking
 //    starting point match & reflect
 
+//--------------------------------------------
+struct AutoVelocityDatapoints {
+   u32 datapoint_count;
+   North_PathDataPoint *datapoints;
+};
+
+struct DVTA_Data {
+   u32 datapoint_count;
+   f32 *d;
+   f32 *v;
+   f32 *t;
+   f32 *a;
+};
+
+DVTA_Data GetDVTA(AutoVelocityDatapoints *data) {
+   Assert(data->datapoint_count >= 2);
+
+   f32 *d = PushTempArray(f32, data->datapoint_count);
+   f32 *v = PushTempArray(f32, data->datapoint_count);
+   f32 *t = PushTempArray(f32, data->datapoint_count);
+   f32 *a = PushTempArray(f32, data->datapoint_count - 1);
+
+   for(u32 i = 0; i < data->datapoint_count; i++) {
+      d[i] = data->datapoints[i].distance;
+      v[i] = data->datapoints[i].value;
+   }
+
+   t[0] = 0;
+
+   for(u32 i = 0; i < (data->datapoint_count - 1); i++) {
+      t[1 + i] = ((2 * (d[i + 1] - d[i])) / (v[i + 1] + v[i]))  + t[i];
+      a[i] = (v[i+1]*v[i+1] - v[i]*v[i]) / (2 * (d[i + 1] - d[i]));
+   }
+   
+   DVTA_Data result = {data->datapoint_count, d, v, t, a};
+   return result;
+}
+
+f32 GetTotalTime(DVTA_Data dvta) {
+   return dvta.t[dvta.datapoint_count - 1];
+}
+
+f32 GetTotalLength(DVTA_Data dvta) {
+   return dvta.d[dvta.datapoint_count - 1];
+}
+
+//NOTE: V(s)
+f32 GetVelocityAt(DVTA_Data dvta, f32 distance) {
+   distance = Clamp(0, GetTotalLength(dvta), distance);
+   for(u32 i = 0; i < (dvta.datapoint_count - 1); i++) {
+      if((dvta.d[i] <= distance) && (distance <= dvta.d[i+1])) {
+         f32 delta_t;
+         if(dvta.a[i] == 0) {
+            delta_t = (distance - dvta.d[i]) / dvta.v[i];
+         } else {
+            delta_t = (sqrtf(2*dvta.a[i]*(distance - dvta.d[i]) + dvta.v[i]*dvta.v[i]) - dvta.v[i]) / dvta.a[i];
+         }
+
+         return dvta.v[i] + dvta.a[i]*delta_t;
+      }
+   }
+
+   Assert(false);
+   return 0;
+}
+
+//NOTE: T(s)
+f32 GetArrivalTimeAt(DVTA_Data dvta, f32 distance) {
+   distance = Clamp(0, GetTotalLength(dvta), distance);
+   for(u32 i = 0; i < (dvta.datapoint_count - 1); i++) {
+      if((dvta.d[i] <= distance) && (distance <= dvta.d[i+1])) {
+         f32 delta_t;
+         if(dvta.a[i] == 0) {
+            delta_t = (distance - dvta.d[i]) / dvta.v[i];
+         } else {
+            delta_t = (sqrtf(2*dvta.a[i]*(distance - dvta.d[i]) + dvta.v[i]*dvta.v[i]) - dvta.v[i]) / dvta.a[i];
+         }
+
+         return dvta.t[i] + delta_t;
+      }
+   }
+
+   Assert(false);
+   return 0;
+}
+
+//NOTE: D(t)
+f32 GetDistanceAt(DVTA_Data dvta, f32 time) {
+   time = Clamp(0, GetTotalTime(dvta), time);
+   for(u32 i = 0; i < (dvta.datapoint_count - 1); i++) {
+      if((dvta.t[i] <= time) && (time <= dvta.t[i+1])) {
+         f32 dt = time - dvta.t[i];
+         return dvta.d[i] + dvta.v[i]*dt + 0.5*dvta.a[i]*dt*dt;
+      }
+   }
+
+   Assert(false);
+   return 0;
+}
+//--------------------------------------------
+
 struct AutoContinuousEvent {
    string subsystem_name;
    string command_name;
@@ -21,8 +122,7 @@ struct AutoDiscreteEvent {
 };
 
 struct AutoPathlikeData {
-   u32 velocity_datapoint_count;
-   North_PathDataPoint *velocity_datapoints;
+   AutoVelocityDatapoints velocity;
 
    u32 continuous_event_count;
    AutoContinuousEvent *continuous_events;
@@ -74,63 +174,27 @@ struct AutoNode {
    AutoPath **out_paths;
 };
 
-struct AutoPath_LenLeaf {
-   f32 len;
+struct AutoRobotPose {
    v2 pos;
+   f32 angle; //NOTE: in radians
 };
 
-struct AutoPath_LenBranch {
-   f32 len;
-
-   f32 greater_value;
-   f32 less_value;
-
-   union {
-      struct {
-         u32 greater_leaf;
-         u32 less_leaf;
-      };
-
-      struct {
-         AutoPath_LenBranch *greater_branch;
-         AutoPath_LenBranch *less_branch;
-      };
-   };
-};
-
-struct AutoPath_TimeLeaf {
-   f32 time;
-   f32 len;
-};
-
-struct AutoPath_TimeBranch {
-   f32 time;
-
-   f32 greater_value;
-   f32 less_value;
-
-   union {
-      struct {
-         u32 greater_leaf;
-         u32 less_leaf;
-      };
-
-      struct {
-         AutoPath_TimeBranch *greater_branch;
-         AutoPath_TimeBranch *less_branch;
-      };
-   };
-};
-
-//NOTE: this means we have 2^sample_exp samples
-//TODO: the (dist -> pos) map is bigger than the (time -> dist) map, thats why this works
-const u32 sample_exp = 7;
-u64 GetMapMemorySize() {
-   u64 result = Power(2, sample_exp) * sizeof(AutoPath_LenLeaf);
-   for(u32 i = 0; i < sample_exp; i++) {
-      result += Power(2, i) * sizeof(AutoPath_LenBranch);
-   }
+AutoRobotPose lerp(AutoRobotPose a, f32 t, AutoRobotPose b) {
+   AutoRobotPose result = {};
+   result.pos = lerp(a.pos, t, b.pos);
+   f32 d_theta = ShortestAngleBetween_Radians(a.angle, b.angle);
+   result.angle = CanonicalizeAngle_Radians(a.angle + d_theta * t);
    return result;
+}
+
+void map_lerp_pose(InterpolatingMap_Leaf *leaf_a, InterpolatingMap_Leaf *leaf_b, 
+                   f32 t, void *in_result)
+{
+   AutoRobotPose *result = (AutoRobotPose *) in_result;
+   AutoRobotPose *a = (AutoRobotPose *) leaf_a->data_ptr;
+   AutoRobotPose *b = (AutoRobotPose *) leaf_b->data_ptr;
+   
+   *result = lerp(*a, t, *b);
 }
 
 struct AutoPath {   
@@ -150,18 +214,15 @@ struct AutoPath {
    u32 control_point_count;
    North_HermiteControlPoint *control_points;
 
-   //-------------------------------------
-   MemoryArena length_to_pos_memory;
+   InterpolatingMap len_to_pose;
    f32 length;
-   AutoPath_LenBranch *len_root;
-   AutoPath_LenBranch *len_layers[sample_exp];
-   AutoPath_LenLeaf *len_samples;
-
-   MemoryArena time_to_length_memory;
-   f32 time;
-   AutoPath_TimeBranch *time_root;
-   AutoPath_TimeLeaf *time_samples;
 };
+
+void InitAutoPath(AutoPath *path) {
+   path->len_to_pose.arena = PlatformAllocArena(Megabyte(2));
+   path->len_to_pose.sample_exp = 7;
+   path->len_to_pose.lerp_callback = map_lerp_pose;
+}
 
 struct AutoProjectLink {
    AutoNode *starting_node;
@@ -201,148 +262,50 @@ v2 CubicHermiteSplineTangent(North_HermiteControlPoint a, North_HermiteControlPo
 }
 
 void RecalculateAutoPathLength(AutoPath *path) {
-   MemoryArena *arena = &path->length_to_pos_memory;
-   Reset(arena);
-
-   u32 sample_count = Power(2, sample_exp); 
-   AutoPath_LenLeaf *samples = PushArray(arena, AutoPath_LenLeaf, sample_count);
+   InterpolatingMapSamples samples = ResetMap(&path->len_to_pose);
    AutoPathSpline spline = GetAutoPathSpline(path);
-   f32 step = (f32)(spline.point_count - 1) / (f32)(sample_count - 1);
+   f32 step = (f32)(spline.point_count - 1) / (f32)(samples.count - 1);
    
-   samples[0].len = 0;
-   samples[0].pos = spline.points[0].pos;
-
    f32 length = 0;
    v2 last_pos = spline.points[0].pos;
-   for(u32 i = 1; i < sample_count; i++) {
+   for(u32 i = 0; i < samples.count; i++) {
       f32 t_full = step * i;
       u32 spline_i = Clamp(0, spline.point_count - 2, (u32) t_full);
       v2 pos = CubicHermiteSpline(spline.points[spline_i], spline.points[spline_i + 1], t_full - (f32)spline_i);
 
+      AutoRobotPose *curr_pose = PushStruct(samples.arena, AutoRobotPose);
+      curr_pose->pos = pos;
+      curr_pose->angle = ToRadians(Angle(CubicHermiteSplineTangent(spline.points[spline_i], spline.points[spline_i + 1], t_full - (f32)spline_i)));
+
       length += Length(pos - last_pos);
       last_pos = pos;
       
-      samples[i].len = length;
-      samples[i].pos = pos;
+      samples.data[i].len = length;
+      samples.data[i].data_ptr = curr_pose;
    }
-   path->len_samples = samples;
    path->length = length;
 
-   u32 last_layer_count = Power(2, sample_exp - 1);
-   AutoPath_LenBranch *last_layer = PushArray(arena, AutoPath_LenBranch, last_layer_count);
-   for(u32 i = 0; i < last_layer_count; i++) {
-      AutoPath_LenLeaf *less = samples + (2 * i);
-      AutoPath_LenLeaf *greater = samples + (2 * i + 1);
+   BuildMap(&path->len_to_pose);
+}
 
-      last_layer[i].less_leaf = 2 * i;
-      last_layer[i].less_value = less->len;
-      last_layer[i].greater_leaf = 2 * i + 1;
-      last_layer[i].greater_value = greater->len;
-      last_layer[i].len = (less->len + greater->len) / 2;
-   }
-   
-   u32 debug_layer_i = 0;
-   path->len_layers[debug_layer_i++] = last_layer;
-
-   for(u32 i = 1; i < sample_exp; i++) {
-      u32 layer_count = Power(2, sample_exp - i - 1);
-      AutoPath_LenBranch *curr_layer = PushArray(arena, AutoPath_LenBranch, layer_count);
-
-      for(u32 i = 0; i < layer_count; i++) {
-         AutoPath_LenBranch *less = last_layer + (2 * i);
-         AutoPath_LenBranch *greater = last_layer + (2 * i + 1);
-
-         curr_layer[i].less_branch = less;
-         curr_layer[i].less_value = less->less_value;
-         curr_layer[i].greater_branch = greater;
-         curr_layer[i].greater_value = greater->greater_value;
-         curr_layer[i].len = (less->greater_value + greater->less_value) / 2;
-      }
-
-      last_layer_count = layer_count;
-      last_layer = curr_layer;
-      path->len_layers[debug_layer_i++] = last_layer;
-   }
-
-   path->len_root = last_layer;
+f32 GetVelocityAt(AutoPathlikeData *data, f32 distance) {
+   DVTA_Data dvta = GetDVTA(&data->velocity);
+   return GetVelocityAt(dvta, distance);
 }
 
 f32 GetVelocityAt(AutoPath *path, f32 distance) {
-   for(u32 i = 1; i < path->data.velocity_datapoint_count; i++) {
-      North_PathDataPoint a = path->data.velocity_datapoints[i - 1];
-      North_PathDataPoint b = path->data.velocity_datapoints[i];
-      if((a.distance <= distance) && (distance <= b.distance)) {
-         f32 t = (distance - a.distance) / (b.distance - a.distance);
-         return lerp(a.value, t, b.value);
-      }
-   }
-
-   return 0;
+   return GetVelocityAt(&path->data, distance); 
 }
 
 void RecalculateAutoPathTime(AutoPath *path) {
-   Assert(path->data.velocity_datapoint_count >= 2);
-   path->data.velocity_datapoints[0].distance = 0;
-   path->data.velocity_datapoints[0].value = 0;
-   path->data.velocity_datapoints[path->data.velocity_datapoint_count - 1].distance = path->length;
-   path->data.velocity_datapoints[path->data.velocity_datapoint_count - 1].value = 0;
-   for(u32 i = 0; i < path->data.velocity_datapoint_count; i++) {
-      path->data.velocity_datapoints[i].distance = Min(path->data.velocity_datapoints[i].distance, path->length);
+   Assert(path->data.velocity.datapoint_count >= 2);
+   path->data.velocity.datapoints[0].distance = 0;
+   path->data.velocity.datapoints[0].value = 0;
+   path->data.velocity.datapoints[path->data.velocity.datapoint_count - 1].distance = path->length;
+   path->data.velocity.datapoints[path->data.velocity.datapoint_count - 1].value = 0;
+   for(u32 i = 0; i < path->data.velocity.datapoint_count; i++) {
+      path->data.velocity.datapoints[i].distance = Min(path->data.velocity.datapoints[i].distance, path->length);
    }
-
-   MemoryArena *arena = &path->time_to_length_memory;
-   Reset(arena);
-
-   u32 sample_count = Power(2, sample_exp); 
-   AutoPath_TimeLeaf *samples = PushArray(arena, AutoPath_TimeLeaf, sample_count);
-   f32 ds = path->length / (f32)sample_count;
-
-   f32 time = 0;
-   for(u32 i = 1; i < (sample_count - 1); i++) {
-      time += (1 / GetVelocityAt(path, ds * i)) * ds;
-
-      samples[i].time = time;
-      samples[i].len = ds * i;
-   }
-   path->time = time;
-
-   //TODO: last sample is incorrect
-   samples[sample_count - 1].time = samples[sample_count - 2].time;
-   samples[sample_count - 1].len = path->length;;
-   
-   u32 last_layer_count = Power(2, sample_exp - 1);
-   AutoPath_TimeBranch *last_layer = PushArray(arena, AutoPath_TimeBranch, last_layer_count);
-   for(u32 i = 0; i < last_layer_count; i++) {
-      AutoPath_TimeLeaf *less = samples + (2 * i);
-      AutoPath_TimeLeaf *greater = samples + (2 * i + 1);
-
-      last_layer[i].less_leaf = 2 * i;
-      last_layer[i].less_value = less->time;
-      last_layer[i].greater_leaf = 2 * i + 1;
-      last_layer[i].greater_value = greater->time;
-      last_layer[i].time = (less->time + greater->time) / 2;
-   }
-
-   for(u32 i = 1; i < sample_exp; i++) {
-      u32 layer_count = Power(2, sample_exp - i - 1);
-      AutoPath_TimeBranch *curr_layer = PushArray(arena, AutoPath_TimeBranch, layer_count);
-
-      for(u32 i = 0; i < layer_count; i++) {
-         AutoPath_TimeBranch *less = last_layer + (2 * i);
-         AutoPath_TimeBranch *greater = last_layer + (2 * i + 1);
-
-         curr_layer[i].less_branch = less;
-         curr_layer[i].less_value = less->less_value;
-         curr_layer[i].greater_branch = greater;
-         curr_layer[i].greater_value = greater->greater_value;
-         curr_layer[i].time = (less->greater_value + greater->less_value) / 2;
-      }
-
-      last_layer_count = layer_count;
-      last_layer = curr_layer;
-   }
-
-   path->time_root = last_layer;
 }
 
 void RecalculateAutoPath(AutoPath *path) {
@@ -362,57 +325,14 @@ void RecalculateAutoPath(AutoPath *path) {
    });
 }
 
-//TODO: fix the two below
-v2 GetAutoPathPoint(AutoPath *path, f32 distance) {
-   u32 sample_count = Power(2, sample_exp);
-   AutoPath_LenBranch *branch = path->len_root;
-   for(u32 i = 0; i < (sample_exp - 1); i++) {
-      branch = (distance > branch->len) ? branch->greater_branch : branch->less_branch;
-   }
-
-   u32 a_i;
-   u32 b_i;
-
-   u32 center_leaf_i = (distance > branch->len) ? branch->greater_leaf : branch->less_leaf;
-   if(distance > path->len_samples[center_leaf_i].len) {
-      a_i = Clamp(0, sample_count - 1, center_leaf_i);
-      b_i = Clamp(0, sample_count - 1, center_leaf_i + 1);
-   } else {
-      a_i = Clamp(0, sample_count - 1, center_leaf_i - 1);
-      b_i = Clamp(0, sample_count - 1, center_leaf_i);
-   }
-
-   AutoPath_LenLeaf *leaf_a = path->len_samples + a_i;
-   AutoPath_LenLeaf *leaf_b = path->len_samples + b_i;
-
-   f32 t = (distance - leaf_a->len) / (leaf_b->len - leaf_a->len); 
-   return lerp(leaf_a->pos, t, leaf_b->pos);
+AutoRobotPose GetAutoPathPose(AutoPath *path, f32 distance) {
+   AutoRobotPose result = {};
+   MapLookup(&path->len_to_pose, distance, &result);
+   return result;
 }
 
-f32 GetAutoPathDistForTime(AutoPath *path, f32 time) {
-   u32 sample_count = Power(2, sample_exp);
-   AutoPath_TimeBranch *branch = path->time_root;
-   for(u32 i = 0; i < (sample_exp - 1); i++) {
-      branch = (time > branch->time) ? branch->greater_branch : branch->less_branch;
-   }
-
-   u32 a_i;
-   u32 b_i;
-
-   u32 center_leaf_i = (time > branch->time) ? branch->greater_leaf : branch->less_leaf;
-   if(time > path->time_samples[center_leaf_i].time) {
-      a_i = Clamp(0, sample_count - 1, center_leaf_i);
-      b_i = Clamp(0, sample_count - 1, center_leaf_i + 1);
-   } else {
-      a_i = Clamp(0, sample_count - 1, center_leaf_i - 1);
-      b_i = Clamp(0, sample_count - 1, center_leaf_i);
-   }
-
-   AutoPath_TimeLeaf *leaf_a = path->time_samples + a_i;
-   AutoPath_TimeLeaf *leaf_b = path->time_samples + b_i;
-
-   f32 t = (time - leaf_a->time) / (leaf_b->time - leaf_a->time); 
-   return lerp(leaf_a->time, t, leaf_b->time);
+v2 GetAutoPathPoint(AutoPath *path, f32 distance) {
+   return GetAutoPathPose(path, distance).pos;
 }
 
 void RecalculateAutoNode(AutoNode *node) {
@@ -424,13 +344,13 @@ void RecalculateAutoNode(AutoNode *node) {
             command->pivot.start_angle = start_angle;
             f32 pivot_length = abs(AngleBetween(command->pivot.start_angle, command->pivot.end_angle, command->pivot.turns_clockwise));
 
-            Assert(command->pivot.data.velocity_datapoint_count >= 2);
-            command->pivot.data.velocity_datapoints[0].distance = 0;
-            command->pivot.data.velocity_datapoints[0].value = 0;
-            command->pivot.data.velocity_datapoints[command->pivot.data.velocity_datapoint_count - 1].distance = pivot_length;
-            command->pivot.data.velocity_datapoints[command->pivot.data.velocity_datapoint_count - 1].value = 0;
-            for(u32 j = 0; j < command->pivot.data.velocity_datapoint_count; j++) {
-               command->pivot.data.velocity_datapoints[j].distance = Min(command->pivot.data.velocity_datapoints[j].distance, pivot_length);
+            Assert(command->pivot.data.velocity.datapoint_count >= 2);
+            command->pivot.data.velocity.datapoints[0].distance = 0;
+            command->pivot.data.velocity.datapoints[0].value = 0;
+            command->pivot.data.velocity.datapoints[command->pivot.data.velocity.datapoint_count - 1].distance = pivot_length;
+            command->pivot.data.velocity.datapoints[command->pivot.data.velocity.datapoint_count - 1].value = 0;
+            for(u32 j = 0; j < command->pivot.data.velocity.datapoint_count; j++) {
+               command->pivot.data.velocity.datapoints[j].distance = Min(command->pivot.data.velocity.datapoints[j].distance, pivot_length);
             }
 
             ForEachArray(j, cevent, command->pivot.data.continuous_event_count, command->pivot.data.continuous_events, {
@@ -506,9 +426,9 @@ AutoCommand *ParseAutoCommand(buffer *file, MemoryArena *arena) {
          result->pivot.end_angle = body->end_angle;
          result->pivot.turns_clockwise = body->turns_clockwise ? true : false;
 
-         result->pivot.data.velocity_datapoint_count = body->velocity_datapoint_count;
-         Assert(result->pivot.data.velocity_datapoint_count >= 2);
-         result->pivot.data.velocity_datapoints = ConsumeAndCopyArray(arena, file, North_PathDataPoint, body->velocity_datapoint_count);
+         result->pivot.data.velocity.datapoint_count = body->velocity_datapoint_count;
+         Assert(result->pivot.data.velocity.datapoint_count >= 2);
+         result->pivot.data.velocity.datapoints = ConsumeAndCopyArray(arena, file, North_PathDataPoint, body->velocity_datapoint_count);
 
          result->pivot.data.continuous_event_count = body->continuous_event_count;
          result->pivot.data.continuous_events = PushArray(arena, AutoContinuousEvent, body->continuous_event_count);
@@ -574,9 +494,9 @@ AutoPath *ParseAutoPath(buffer *file, MemoryArena *arena) {
    path->control_point_count = file_path->control_point_count;
    path->control_points = ConsumeAndCopyArray(arena, file, North_HermiteControlPoint, file_path->control_point_count);
    
-   path->data.velocity_datapoint_count = file_path->velocity_datapoint_count;
-   Assert(path->data.velocity_datapoint_count >= 2);
-   path->data.velocity_datapoints = ConsumeAndCopyArray(arena, file, North_PathDataPoint, file_path->velocity_datapoint_count);
+   path->data.velocity.datapoint_count = file_path->velocity_datapoint_count;
+   Assert(path->data.velocity.datapoint_count >= 2);
+   path->data.velocity.datapoints = ConsumeAndCopyArray(arena, file, North_PathDataPoint, file_path->velocity_datapoint_count);
 
    path->data.continuous_event_count = file_path->continuous_event_count;
    path->data.continuous_events = PushArray(arena, AutoContinuousEvent, path->data.continuous_event_count);
@@ -590,9 +510,8 @@ AutoPath *ParseAutoPath(buffer *file, MemoryArena *arena) {
       path->data.discrete_events[i] = ParseAutoDiscreteEvent(file, arena);
    }
 
-   path->length_to_pos_memory = PlatformAllocArena(GetMapMemorySize());
-   path->time_to_length_memory = PlatformAllocArena(GetMapMemorySize());
-
+   InitAutoPath(path);
+   
    path->out_node = ParseAutoNode(file, arena);
    path->out_node->in_path = path;
    return path;
@@ -688,12 +607,12 @@ void WriteAutoCommand(buffer *file, AutoCommand *command) {
             body.end_angle = command->pivot.end_angle;
             body.turns_clockwise = command->pivot.turns_clockwise;
             
-            body.velocity_datapoint_count = command->pivot.data.velocity_datapoint_count;
+            body.velocity_datapoint_count = command->pivot.data.velocity.datapoint_count;
             body.continuous_event_count = command->pivot.data.continuous_event_count;
             body.discrete_event_count = command->pivot.data.discrete_event_count;
          });
          
-         WriteArray(file, command->pivot.data.velocity_datapoints, command->pivot.data.velocity_datapoint_count);
+         WriteArray(file, command->pivot.data.velocity.datapoints, command->pivot.data.velocity.datapoint_count);
          ForEachArray(i, event, command->pivot.data.continuous_event_count, command->pivot.data.continuous_events, {
             WriteAutoContinuousEvent(file, event);
          });
@@ -730,7 +649,7 @@ void WriteAutoPath(buffer *file, AutoPath *path) {
       path_header.conditional_length = path->has_conditional ? path->conditional.length : 0;
       path_header.control_point_count = path->control_point_count;
 
-      path_header.velocity_datapoint_count = path->data.velocity_datapoint_count;
+      path_header.velocity_datapoint_count = path->data.velocity.datapoint_count;
       path_header.continuous_event_count = path->data.continuous_event_count;
       path_header.discrete_event_count = path->data.discrete_event_count;
    });
@@ -740,7 +659,7 @@ void WriteAutoPath(buffer *file, AutoPath *path) {
    
    WriteArray(file, path->control_points, path->control_point_count);
    
-   WriteArray(file, path->data.velocity_datapoints, path->data.velocity_datapoint_count);
+   WriteArray(file, path->data.velocity.datapoints, path->data.velocity.datapoint_count);
    ForEachArray(i, event, path->data.continuous_event_count, path->data.continuous_events, {
       WriteAutoContinuousEvent(file, event);
    });

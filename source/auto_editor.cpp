@@ -12,6 +12,7 @@
 
 enum EditorPage {
    EditorPage_Home,
+   EditorPage_Simulator,
    EditorPage_Robots,
    EditorPage_Settings
 };
@@ -20,8 +21,7 @@ enum EditorView {
    EditorView_Blank,
    EditorView_OpenFile,
    EditorView_NewFile,
-   EditorView_Editing,
-   EditorView_Simulating,
+   EditorView_Editing
 };
 
 enum EditorSelectedType {
@@ -35,6 +35,8 @@ enum PathEditMode {
    AddControlPoint,
    RemoveControlPoint,
 };
+
+#include "differential_drive_sim.cpp"
 
 struct EditorState {
    EditorPage page;
@@ -65,6 +67,8 @@ struct EditorState {
    FileListLink *ncff_files;
    FileListLink *ncrp_files;
    FileListLink *ncap_files;
+
+   SimulatorState simulator;
 };
 
 //--------------------move-to-common---------------------------
@@ -153,9 +157,14 @@ void initEditor(EditorState *state) {
    state->profiles.loaded.arena = PlatformAllocArena(Megabyte(10));
    state->project_arena = PlatformAllocArena(Megabyte(30));
    state->file_lists_arena = PlatformAllocArena(Megabyte(10));
+   state->simulator.graph = NewMultiLineGraph(PlatformAllocArena(Megabyte(10)));
+   state->simulator.arena = PlatformAllocArena(Megabyte(10));
 
    InitTextBoxData(&state->project_name_box, state->_project_name_box);
    InitFileWatcher(&state->file_watcher, PlatformAllocArena(Kilobyte(512)), "*.*");
+
+   state->simulator.state.size = V2(2, 2);
+   state->simulator.state.pos = V2(9, 9);
 }
 
 void reloadFiles(EditorState *state) {
@@ -210,7 +219,7 @@ void DrawNewFileView(element *page, EditorState *state) {
 
    RobotProfile *profile = &state->profiles.current;
    ui_field_topdown field = FieldTopdown(page, state->settings.field.image, state->settings.field.size,
-                                         Clamp(0, Size(page->bounds).x, 700));
+                                         Clamp(0, 700, Size(page->bounds).x));
 
    v2 robot_size_px =  FeetToPixels(&field, profile->size);
    for(u32 i = 0; i < state->settings.field.starting_position_count; i++) {
@@ -344,7 +353,6 @@ void DrawHome(element *full_page, EditorState *state) {
          case EditorView_OpenFile: DrawOpenFileView(page, state); break;
          case EditorView_NewFile: DrawNewFileView(page, state); break;
          case EditorView_Editing: DrawEditingView(page, state); break;
-         case EditorView_Simulating: DrawSimulationView(page, state); break;
       }
    } else {
       if(!state->settings.field.loaded)
@@ -385,12 +393,14 @@ void DrawUI(element *root, EditorState *state) {
    state->top_bar = RowPanel(root, Size(Size(root).x, page_tab_height));
    Background(state->top_bar, dark_grey);
    PageButton("Home", EditorPage_Home, state);
+   PageButton("Sim", EditorPage_Simulator, state);
    PageButton("Robots", EditorPage_Robots, state);
    PageButton("Settings", EditorPage_Settings, state);
 
    element *page = ColumnPanel(root, RectMinMax(root->bounds.min + V2(0, status_bar_height + page_tab_height), root->bounds.max));
    switch(state->page) {
       case EditorPage_Home: DrawHome(page, state); break;
+      case EditorPage_Simulator: DrawSimulator(page, state); break;
       case EditorPage_Robots: DrawProfiles(page, &state->profiles, state->ncrp_files); break;
       case EditorPage_Settings: {
          v2 robot_size_ft = V2(2, 2);

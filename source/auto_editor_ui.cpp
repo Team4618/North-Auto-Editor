@@ -32,10 +32,14 @@ editable_graph_line GraphLine(element *e, f32 min, f32 max,
    return result;
 }
 
-v2 GetGraphPoint(editable_graph_line line, North_PathDataPoint point) {
-   f32 x = line.e->bounds.min.x + Size(line.e).x * (point.distance / line.length);
-   f32 y = line.e->bounds.min.y + Size(line.e).y * (1 - ((point.value - line.min) / (line.max - line.min)));
+v2 GetGraphPoint(editable_graph_line line, f32 distance, f32 value) {
+   f32 x = line.e->bounds.min.x + Size(line.e).x * (distance / line.length);
+   f32 y = line.e->bounds.min.y + Size(line.e).y * (1 - ((value - line.min) / (line.max - line.min)));
    return V2(x, y);
+}
+
+v2 GetGraphPoint(editable_graph_line line, North_PathDataPoint point) {
+   return GetGraphPoint(line, point.distance, point.value);
 }
 
 v2 GetGraphPoint(editable_graph_line line, u32 i) {
@@ -50,14 +54,16 @@ North_PathDataPoint GraphPointToDataPoint(editable_graph_line line, v2 point) {
 }
 
 rect2 GetClampRectOnGraph(editable_graph_line line, u32 i) {
+   f32 min_dist = 0.001 * line.length;
+
    f32 x1 = line.e->bounds.min.x;
    if(i > 0) {
-      x1 = line.e->bounds.min.x + Size(line.e).x * (line.samples[i - 1].distance / line.length);
+      x1 = line.e->bounds.min.x + Size(line.e).x * ((line.samples[i - 1].distance + min_dist) / line.length);
    }
 
    f32 x2 = line.e->bounds.max.x;
    if(i < (line.sample_count - 1)) {
-      x2 = line.e->bounds.min.x + Size(line.e).x * (line.samples[i + 1].distance / line.length);
+      x2 = line.e->bounds.min.x + Size(line.e).x * ((line.samples[i + 1].distance - min_dist) / line.length);
    }
 
    return RectMinMax(V2(x1, line.e->bounds.min.y), V2(x2, line.e->bounds.max.y));  
@@ -96,7 +102,7 @@ struct ui_pathlike_editor {
 };
 
 ui_pathlike_editor DrawPathlikeDataEditor(EditorState *state, element *parent, RobotProfile *profile,
-                                          AutoPathlikeData *data, f32 path_length)
+                                          AutoPathlikeData *data, f32 path_length, f32 max_velocity)
 {
    ui_pathlike_editor result = {};
    element *graph = Panel(parent, Size(Size(parent).x - 10, 200).Padding(5, 5).Captures(INTERACTION_CLICK));
@@ -109,11 +115,12 @@ ui_pathlike_editor DrawPathlikeDataEditor(EditorState *state, element *parent, R
    bool remove_velocity_sample = false;
    u32 remove_velocity_sample_i = 0;
 
-   editable_graph_line velocity_line = GraphLine(graph, 0, 20, path_length, data->velocity_datapoints, data->velocity_datapoint_count);
-   for(u32 i = 0; i < data->velocity_datapoint_count; i++) {
-      UI_SCOPE(graph, data->velocity_datapoints + i);
+   DVTA_Data dvta = GetDVTA(&data->velocity);
+   editable_graph_line velocity_line = GraphLine(graph, 0, max_velocity, path_length, data->velocity.datapoints, data->velocity.datapoint_count);
+   for(u32 i = 0; i < data->velocity.datapoint_count; i++) {
+      UI_SCOPE(graph, data->velocity.datapoints + i);
       
-      if((i != 0) && (i != (data->velocity_datapoint_count - 1))) {
+      if((i != 0) && (i != (data->velocity.datapoint_count - 1))) {
          ui_graph_handle handle = GraphHandle(velocity_line, i);
          if(handle.moved) {
             result.recalculate = true;
@@ -128,7 +135,27 @@ ui_pathlike_editor DrawPathlikeDataEditor(EditorState *state, element *parent, R
          v2 point_a = GetGraphPoint(velocity_line, i - 1);
          v2 point_b = GetGraphPoint(velocity_line, i);
          
-         Line(graph, GREEN, 2, point_a, point_b);
+         //TODO: click ctrl to make straight line 
+
+         f32 section_distance = (data->velocity.datapoints[i].distance - data->velocity.datapoints[i - 1].distance);
+         u32 curve_sample_count = (u32)section_distance * 10 + 4;
+         f32 step = section_distance / (curve_sample_count - 1);
+         v2 *velocity_curve_points = PushTempArray(v2, curve_sample_count);
+         for(u32 j = 0; j < curve_sample_count; j++) {
+            f32 curr_dist = step * j + data->velocity.datapoints[i - 1].distance;
+            f32 curr_vel = GetVelocityAt(dvta, curr_dist);
+            velocity_curve_points[j] = GetGraphPoint(velocity_line, curr_dist, curr_vel);
+         }
+         _Line(graph, GREEN, 2, velocity_curve_points, curve_sample_count);
+
+         if(IsHot(graph)) {
+            f32 cursor_d = path_length * (GetLocalCursor(graph).x / Size(graph).x);
+            if((data->velocity.datapoints[i - 1].distance <= cursor_d) && (cursor_d <= data->velocity.datapoints[i].distance)) {
+               string accel_text = Concat(Literal("Accel= "), ToString(dvta.a[i - 1]), Literal(" ft/s^2"));
+               Text(graph, accel_text, graph->bounds.min + V2(0, 20), 20, WHITE);
+            }
+         }
+
          element *new_sample_button = Panel(graph, RectCenterSize(Midpoint(point_a, point_b), V2(5, 5)), Captures(INTERACTION_CLICK));
          Background(new_sample_button, RED);
          if(WasClicked(new_sample_button)) {
@@ -140,18 +167,18 @@ ui_pathlike_editor DrawPathlikeDataEditor(EditorState *state, element *parent, R
 
    if(new_velocity_sample) {
       North_PathDataPoint new_datapoint = {};
-      new_datapoint.distance = (data->velocity_datapoints[new_velocity_sample_i - 1].distance + data->velocity_datapoints[new_velocity_sample_i].distance) / 2;
-      new_datapoint.value = (data->velocity_datapoints[new_velocity_sample_i - 1].value + data->velocity_datapoints[new_velocity_sample_i].value) / 2;
+      new_datapoint.distance = (data->velocity.datapoints[new_velocity_sample_i - 1].distance + data->velocity.datapoints[new_velocity_sample_i].distance) / 2;
+      new_datapoint.value = (data->velocity.datapoints[new_velocity_sample_i - 1].value + data->velocity.datapoints[new_velocity_sample_i].value) / 2;
       
-      data->velocity_datapoints = 
-                     ArrayInsert(&state->project_arena, North_PathDataPoint, data->velocity_datapoints,
-                                 new_velocity_sample_i, &new_datapoint, data->velocity_datapoint_count++);
+      data->velocity.datapoints = 
+                     ArrayInsert(&state->project_arena, North_PathDataPoint, data->velocity.datapoints,
+                                 new_velocity_sample_i, &new_datapoint, data->velocity.datapoint_count++);
       
       result.recalculate = true;
    } else if(remove_velocity_sample) {
-      data->velocity_datapoints = 
-         ArrayRemove(&state->project_arena, North_PathDataPoint, data->velocity_datapoints,
-                     remove_velocity_sample_i, data->velocity_datapoint_count--);
+      data->velocity.datapoints = 
+         ArrayRemove(&state->project_arena, North_PathDataPoint, data->velocity.datapoints,
+                     remove_velocity_sample_i, data->velocity.datapoint_count--);
 
       result.recalculate = true;
    }
@@ -339,20 +366,30 @@ void DrawPivotCommandEditor(EditorState *state, AutoCommand *command, element *c
    });
 
    element *angle_row = RowPanel(command_panel, Size(Size(command_panel).x, 20)); 
-   Label(angle_row, Concat(Literal("Angle Between "), ToString(AngleBetween(command->pivot.start_angle, command->pivot.end_angle, command->pivot.turns_clockwise))), 20, WHITE);
    Label(angle_row, "Dest angle: ", 20, WHITE);
+
+   command->pivot.end_angle = CanonicalizeAngle_Degrees(command->pivot.end_angle);
    TextBox(angle_row, &command->pivot.end_angle, 20);
    Label(angle_row, "Clockwise: ", 20, WHITE);
    CheckBox(angle_row, &command->pivot.turns_clockwise, V2(20, 20));
    Label(angle_row, IsClockwiseShorter(command->pivot.start_angle, command->pivot.end_angle) ? "CW Is Shorter" : "CCW Is Shorter", 20, WHITE);
 
    f32 pivot_length = abs(AngleBetween(command->pivot.start_angle, command->pivot.end_angle, command->pivot.turns_clockwise));
-   ui_pathlike_editor path_editor = DrawPathlikeDataEditor(state, command_panel, profile, &command->pivot.data, pivot_length);
+   element *info_row = RowPanel(command_panel, Size(Size(command_panel).x, 20)); 
+   Label(info_row, Concat(Literal("Angle Between "), ToString(AngleBetween(command->pivot.start_angle, command->pivot.end_angle, command->pivot.turns_clockwise))), 20, WHITE);
+   Label(info_row, Concat(Literal("Time "), ToString(GetTotalTime(GetDVTA(&command->pivot.data.velocity)))), 20, WHITE);
+
+   ui_pathlike_editor path_editor = DrawPathlikeDataEditor(state, command_panel, profile, &command->pivot.data, pivot_length, 90);
 
    if(IsHot(path_editor.graph)) {
       f32 cursor_d = pivot_length * (GetLocalCursor(path_editor.graph).x / Size(path_editor.graph).x);
       Text(path_editor.graph, Concat(Literal("Distance="), ToString(cursor_d)), path_editor.graph->bounds.min, 20, WHITE);
       Rectangle(compass, RectCenterSize(Center(compass) + 50 * DirectionNormal(command->pivot.start_angle + cursor_d), V2(5, 5)), BLACK);
+   }
+
+   if(Button(command_panel, "Sim", menu_button).clicked) {
+      ResetMultiLineGraph(&state->simulator.graph);
+      // SimulatePivot(state, command);
    }
 }
 
@@ -368,9 +405,8 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
       new_node->in_path = new_path;
       new_path->in_node = state->selected_node;
       new_path->out_node = new_node;
-      new_path->length_to_pos_memory = PlatformAllocArena(GetMapMemorySize());
-      new_path->time_to_length_memory = PlatformAllocArena(GetMapMemorySize());
-      
+      InitAutoPath(new_path);
+
       if(new_path->in_node == state->project->starting_node) {
          v2 direction_arrow = V2(cosf(state->project->starting_angle * (PI32 / 180)), 
                                  -sinf(state->project->starting_angle * (PI32 / 180)));
@@ -382,12 +418,12 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
       new_path->out_tangent = Normalize(new_path->out_node->pos - new_path->in_node->pos);
       
       RecalculateAutoPathLength(new_path);
-      new_path->data.velocity_datapoint_count = 4;
-      new_path->data.velocity_datapoints = PushArray(&state->project_arena, North_PathDataPoint, 4);
-      new_path->data.velocity_datapoints[0] = { 0, 0 };
-      new_path->data.velocity_datapoints[1] = { new_path->length * 0.1f, 1 };
-      new_path->data.velocity_datapoints[2] = { new_path->length * 0.9f, 1 };
-      new_path->data.velocity_datapoints[3] = { new_path->length, 0 };
+      new_path->data.velocity.datapoint_count = 4;
+      new_path->data.velocity.datapoints = PushArray(&state->project_arena, North_PathDataPoint, 4);
+      new_path->data.velocity.datapoints[0] = { 0, 0 };
+      new_path->data.velocity.datapoints[1] = { new_path->length * 0.1f, 1 };
+      new_path->data.velocity.datapoints[2] = { new_path->length * 0.9f, 1 };
+      new_path->data.velocity.datapoints[3] = { new_path->length, 0 };
       RecalculateAutoPathTime(new_path);
 
       AutoPath **new_out_paths = PushArray(&state->project_arena, AutoPath *, selected_node->path_count + 1);
@@ -471,8 +507,8 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
       if(Button(available_command_list, "Pivot", menu_button).clicked) {
          AutoCommand *new_command = PushStruct(&state->project_arena, AutoCommand);
          new_command->type = North_CommandType::Pivot;
-         new_command->pivot.data.velocity_datapoint_count = 4;
-         new_command->pivot.data.velocity_datapoints = PushArray(&state->project_arena, North_PathDataPoint, new_command->pivot.data.velocity_datapoint_count);
+         new_command->pivot.data.velocity.datapoint_count = 4;
+         new_command->pivot.data.velocity.datapoints = PushArray(&state->project_arena, North_PathDataPoint, new_command->pivot.data.velocity.datapoint_count);
 
          selected_node->commands =
             ArrayInsert(&state->project_arena, AutoCommand *, selected_node->commands,
@@ -584,6 +620,77 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
    FinalizeLayout(edit_panel);
 }
 
+void SimulatePath(EditorState *state, AutoPath *path) {
+   Reset(&state->simulator.arena);
+   ResetMultiLineGraph(&state->simulator.graph);
+   state->simulator.run_sim = false;
+
+   DVTA_Data dvta = GetDVTA(&path->data.velocity);
+   f32 drivebase = state->simulator.state.size.x;
+
+   PathPlan *plan = PushStruct(&state->simulator.arena, PathPlan);
+   plan->map.arena = PlatformAllocArena(Megabyte(2));
+   plan->map.sample_exp = 7;
+   plan->map.lerp_callback = path_plan_sample_lerp;
+   plan->length = path->length;
+   plan->time = dvta.t[dvta.datapoint_count - 1];
+   plan->velocity.datapoint_count = path->data.velocity.datapoint_count;
+   plan->velocity.datapoints = (North_PathDataPoint *) PushArrayCopy(&state->simulator.arena, North_PathDataPoint, path->data.velocity.datapoints, plan->velocity.datapoint_count);
+
+   InterpolatingMapSamples samples = ResetMap(&plan->map);
+   f32 step = path->length / (samples.count - 1);
+
+   f32 curr_left = 0;
+   f32 curr_right = 0;
+   f32 last_s = 0;
+   for(u32 i = 0; i < samples.count; i++) {
+      f32 curr_s = step * i;
+      AutoRobotPose last_pose = GetAutoPathPose(path, last_s);
+      AutoRobotPose curr_pose = GetAutoPathPose(path, curr_s);
+
+      PathPlanSample *sample = PushStruct(samples.arena, PathPlanSample);
+      samples.data[i].len = curr_s;
+      samples.data[i].data_ptr = sample;
+
+      f32 delta_s = curr_s - last_s;
+      f32 delta_theta = ShortestAngleBetween_Radians(last_pose.angle, curr_pose.angle);
+      f32 d_left_pos = delta_s + (drivebase * delta_theta) / 2;
+      f32 d_right_pos = delta_s - (drivebase * delta_theta) / 2;
+
+      sample->pose = curr_pose;
+      sample->time = GetArrivalTimeAt(dvta, curr_s);
+      sample->left_pos = curr_left + d_left_pos;
+      sample->right_pos = curr_right + d_right_pos;
+
+      f32 dt = GetArrivalTimeAt(dvta, curr_s) - GetArrivalTimeAt(dvta, last_s);
+      sample->left_vel = (d_left_pos == 0) ? 0 : (d_left_pos / dt);
+      sample->right_vel = (d_right_pos == 0) ? 0 : (d_right_pos / dt);
+      f32 theta_dot = (delta_theta == 0) ? 0 : (delta_theta / dt);
+
+      AddEntry(&state->simulator.graph, Literal("Left Pos"), sample->left_pos, sample->time, 1);
+      AddEntry(&state->simulator.graph, Literal("Right Pos"), sample->right_pos, sample->time, 1);
+      AddEntry(&state->simulator.graph, Literal("Left Vel"), sample->left_vel, sample->time, 2);
+      AddEntry(&state->simulator.graph, Literal("Right Vel"), sample->right_vel, sample->time, 2);
+      AddEntry(&state->simulator.graph, Literal("Vel"), GetVelocityAt(dvta, curr_s), sample->time, 2);
+      AddEntry(&state->simulator.graph, Literal("S"), curr_s, sample->time, 0);
+      AddEntry(&state->simulator.graph, Literal("Theta Dot"), theta_dot, sample->time, 3);
+
+      curr_left = sample->left_pos;
+      curr_right = sample->right_pos;
+      last_s = curr_s;
+   }
+   BuildMap(&plan->map);
+
+   state->simulator.pivot = NULL;
+   state->simulator.path = plan;
+
+   PathPlanSample starting_sample = {};
+   MapLookup(&plan->map, 0, &starting_sample);
+
+   state->simulator.state.pos = starting_sample.pose.pos;
+   state->simulator.state.angle = starting_sample.pose.angle;
+}
+
 void DrawSelectedPath(EditorState *state, ui_field_topdown *field, bool field_clicked, element *page) {
    AutoPath *selected_path = state->selected_path;
    RobotProfile *profile = &state->profiles.current;
@@ -614,10 +721,15 @@ void DrawSelectedPath(EditorState *state, ui_field_topdown *field, bool field_cl
       selected_path->is_reverse = !selected_path->is_reverse;
    }
 
-   Label(edit_panel, Concat(Literal("Path length: "), ToString(selected_path->length)), 20, WHITE);
-   Label(edit_panel, Concat(Literal("Time: "), ToString(selected_path->time)), 20, WHITE);
+   if(Button(edit_buttons, "Sim", menu_button).clicked) {
+      ResetMultiLineGraph(&state->simulator.graph);
+      SimulatePath(state, selected_path);
+   }
 
-   ui_pathlike_editor path_editor = DrawPathlikeDataEditor(state, edit_panel, profile, &selected_path->data, selected_path->length);
+   Label(edit_panel, Concat(Literal("Path length: "), ToString(selected_path->length)), 20, WHITE);
+   Label(edit_panel, Concat(Literal("Time: "), ToString(GetTotalTime(GetDVTA(&selected_path->data.velocity)))), 20, WHITE);
+
+   ui_pathlike_editor path_editor = DrawPathlikeDataEditor(state, edit_panel, profile, &selected_path->data, selected_path->length, 20);
    if(path_editor.recalculate) {
       RecalculateAutoPath(selected_path);
    }
@@ -628,7 +740,9 @@ void DrawSelectedPath(EditorState *state, ui_field_topdown *field, bool field_cl
    if(IsHot(path_editor.graph)) {
       f32 cursor_d = selected_path->length * ((Cursor(path_editor.graph) - path_editor.graph->bounds.min).x / Size(path_editor.graph).x);
       Text(path_editor.graph, Concat(Literal("Distance="), ToString(cursor_d)), path_editor.graph->bounds.min, 20, WHITE);
-      Rectangle(field->e, RectCenterSize(GetPoint(field, GetAutoPathPoint(selected_path, cursor_d)), V2(5, 5)), BLACK);
+      AutoRobotPose pose_at_cursor = GetAutoPathPose(selected_path, cursor_d);
+      Rectangle(field->e, RectCenterSize(GetPoint(field, pose_at_cursor.pos), V2(5, 5)), BLACK);
+      Line(field->e, BLACK, 2, GetPoint(field, pose_at_cursor.pos), GetPoint(field, pose_at_cursor.pos + 2 * DirectionNormal(ToDegrees(pose_at_cursor.angle))));
    }
 
    bool point_clicked = false;
@@ -770,11 +884,6 @@ void DrawEditingView(element *page, EditorState *state) {
 
    if(input->key_esc) {
       state->selected_type = NothingSelected;
-   }
-
-   if(Button(state->top_bar, "Simulator", menu_button).clicked) {
-      state->view = EditorView_Simulating;
-      //TODO: generate robot along path texture
    }
 
    if(Button(state->top_bar, "Exit", menu_button).clicked) {

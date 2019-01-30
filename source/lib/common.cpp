@@ -185,7 +185,7 @@ u8 *PushSize(MemoryArena *arena, u64 size) {
    Assert(arena->valid);
 
    MemoryArenaBlock *curr_block = arena->curr_block;
-   if((curr_block->size - curr_block->used) <= size) {
+   if(curr_block->size <= (size + curr_block->used)) {
       if(curr_block->next == NULL) {
          //TODO: what size should we allocate?
          MemoryArenaBlock *new_block = PlatformAllocArenaBlock(Max(arena->initial_size, size));
@@ -195,8 +195,10 @@ u8 *PushSize(MemoryArena *arena, u64 size) {
       } else {
          arena->curr_block = curr_block->next; 
       }
+      curr_block = arena->curr_block;
    }
 
+   Assert(curr_block->size >= (curr_block->used + size));
    u8 *result = curr_block->memory + curr_block->used;
    curr_block->used += size;
    _Zero(result, size);
@@ -420,6 +422,10 @@ f32 abs(f32 x) {
    return (x > 0) ? x : -x;
 }
 
+f64 abs(f64 x) {
+   return (x > 0) ? x : -x;
+}
+
 f32 ToDegrees(f32 r) {
    return r * (180 / PI32);
 }
@@ -442,6 +448,38 @@ bool IsClockwiseShorter(f32 angle1, f32 angle2) {
    } else {
       return abs(angle2 - angle1) < abs(angle2 - angle1 + 360);
    }
+}
+
+f32 CanonicalizeAngle_Degrees(f32 rawAngle) {
+   s32 revolutions = (s32) (rawAngle / 360);
+   f32 modPI = (rawAngle - revolutions * 360);
+   return modPI < 0 ? 360 + modPI : modPI;
+}
+
+f32 CanonicalizeAngle_Radians(f32 rawAngle) {
+   s32 revolutions = (s32) (rawAngle / (2 * PI32));
+   f32 modPI = (rawAngle - revolutions * (2 * PI32));
+   return modPI < 0 ? (2 * PI32) + modPI : modPI;
+}
+
+f32 AngleBetween_Radians(f32 angle1, f32 angle2, bool clockwise) {
+   if(angle2 > angle1) {
+      return clockwise ? (angle2 - angle1 - 2*PI32) : (angle2 - angle1);
+   } else {
+      return clockwise ? (angle2 - angle1) : (angle2 - angle1 + 2*PI32);
+   }
+}
+
+bool IsClockwiseShorter_Radians(f32 angle1, f32 angle2) {
+   if(angle2 > angle1) {
+      return abs(angle2 - angle1 - 2*PI32) < abs(angle2 - angle1);
+   } else {
+      return abs(angle2 - angle1) < abs(angle2 - angle1 + 2*PI32);
+   }
+}
+
+f32 ShortestAngleBetween_Radians(f32 a, f32 b) {
+   return AngleBetween_Radians(a, b, IsClockwiseShorter_Radians(a, b));
 }
 
 union v4 {
@@ -559,6 +597,10 @@ u32 Power(u32 base, u32 exp) {
    }
 
    return result;
+}
+
+f32 Sign(f32 x) {
+   return x > 0 ? 1 : -1;
 }
 
 f32 Length(v2 a) { return sqrtf(a.x * a.x + a.y * a.y); }
@@ -747,6 +789,141 @@ mat4 Orthographic(f32 top, f32 bottom, f32 left, f32 right, f32 nearPlane, f32 f
    
    return result;
 }
+
+//----------------------------------------------
+struct InterpolatingMap_Leaf {
+   f32 len;
+   
+   union {
+      v2 data_v2;
+      f32 data_f32;
+      void *data_ptr;
+   };
+};
+
+struct InterpolatingMap_Branch {
+   f32 len;
+
+   f32 greater_value;
+   f32 less_value;
+
+   union {
+      struct {
+         u32 greater_leaf;
+         u32 less_leaf;
+      };
+
+      struct {
+         InterpolatingMap_Branch *greater_branch;
+         InterpolatingMap_Branch *less_branch;
+      };
+   };
+};
+
+typedef void (*interpolation_map_callback)(InterpolatingMap_Leaf *a, InterpolatingMap_Leaf *b, f32 t, void *result);
+
+struct InterpolatingMap {
+   MemoryArena arena;
+   u32 sample_exp;
+   interpolation_map_callback lerp_callback;
+
+   InterpolatingMap_Branch *root;
+   InterpolatingMap_Branch **layers; //NOTE: has sample_exp arrays/layers in it
+   InterpolatingMap_Leaf *samples;
+};
+
+struct InterpolatingMapSamples {
+   u32 count;
+   InterpolatingMap_Leaf *data;
+   MemoryArena *arena;
+};
+
+InterpolatingMapSamples ResetMap(InterpolatingMap *map) {
+   MemoryArena *arena = &map->arena;
+   Reset(arena);
+
+   u32 sample_count = Power(2, map->sample_exp); 
+   InterpolatingMap_Leaf *samples = PushArray(arena, InterpolatingMap_Leaf, sample_count);
+   map->samples = samples;
+
+   InterpolatingMapSamples result = {sample_count, samples, arena};
+   return result;
+}
+
+void BuildMap(InterpolatingMap *map) {
+   MemoryArena *arena = &map->arena;
+
+   u32 last_layer_count = Power(2, map->sample_exp - 1);
+   InterpolatingMap_Branch *last_layer = PushArray(arena, InterpolatingMap_Branch, last_layer_count);
+   for(u32 i = 0; i < last_layer_count; i++) {
+      InterpolatingMap_Leaf *less = map->samples + (2 * i);
+      InterpolatingMap_Leaf *greater = map->samples + (2 * i + 1);
+
+      last_layer[i].less_leaf = 2 * i;
+      last_layer[i].less_value = less->len;
+      last_layer[i].greater_leaf = 2 * i + 1;
+      last_layer[i].greater_value = greater->len;
+      last_layer[i].len = (less->len + greater->len) / 2;
+   }
+   
+   u32 debug_layer_i = 0;
+   map->layers = PushArray(arena, InterpolatingMap_Branch *, map->sample_exp);
+   map->layers[debug_layer_i++] = last_layer;
+
+   for(u32 i = 1; i < map->sample_exp; i++) {
+      u32 layer_count = Power(2, map->sample_exp - i - 1);
+      InterpolatingMap_Branch *curr_layer = PushArray(arena, InterpolatingMap_Branch, layer_count);
+
+      for(u32 i = 0; i < layer_count; i++) {
+         InterpolatingMap_Branch *less = last_layer + (2 * i);
+         InterpolatingMap_Branch *greater = last_layer + (2 * i + 1);
+
+         curr_layer[i].less_branch = less;
+         curr_layer[i].less_value = less->less_value;
+         curr_layer[i].greater_branch = greater;
+         curr_layer[i].greater_value = greater->greater_value;
+         curr_layer[i].len = (less->greater_value + greater->less_value) / 2;
+      }
+
+      last_layer_count = layer_count;
+      last_layer = curr_layer;
+      map->layers[debug_layer_i++] = last_layer;
+   }
+
+   map->root = last_layer;
+}
+
+void MapLookup(InterpolatingMap *map, f32 distance, void *result) {
+   u32 sample_count = Power(2, map->sample_exp);
+   InterpolatingMap_Branch *branch = map->root;
+   for(u32 i = 0; i < (map->sample_exp - 1); i++) {
+      branch = (distance > branch->len) ? branch->greater_branch : branch->less_branch;
+   }
+
+   u32 a_i;
+   u32 b_i;
+
+   u32 center_leaf_i = (distance > branch->len) ? branch->greater_leaf : branch->less_leaf;
+   if(distance > map->samples[center_leaf_i].len) {
+      a_i = Clamp(0, sample_count - 1, center_leaf_i);
+      b_i = Clamp(0, sample_count - 1, center_leaf_i + 1);
+   } else {
+      a_i = Clamp(0, sample_count - 1, center_leaf_i - 1);
+      b_i = Clamp(0, sample_count - 1, center_leaf_i);
+   }
+
+   InterpolatingMap_Leaf *leaf_a = map->samples + a_i;
+   InterpolatingMap_Leaf *leaf_b = map->samples + b_i;
+
+   f32 t = (distance - leaf_a->len) / (leaf_b->len - leaf_a->len); 
+   map->lerp_callback(leaf_a, leaf_b, t, result);
+}
+
+void interpolation_map_v2_lerp(InterpolatingMap_Leaf *a, InterpolatingMap_Leaf *b, f32 t, void *result) {
+   *((v2 *)result) = lerp(a->data_v2, t, b->data_v2);
+}
+ 
+//----------------------------------------------
 
 string exe_directory = {};
 
