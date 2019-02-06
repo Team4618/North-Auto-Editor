@@ -1,8 +1,4 @@
-//NOTE: needs common & north_file_definitions
-
-//TODO: redo this to use: 
-//    file linking
-//    starting point match & reflect
+//NOTE: needs common, north_file_definitions & robot_profile_utils
 
 //--------------------------------------------
 struct AutoVelocityDatapoints {
@@ -148,12 +144,7 @@ struct AutoCommand {
 
       struct {
          f32 start_angle;
-         
-         // bool path_tangent_end_angle;
-         // union {
-            f32 end_angle; //NOTE: path_tangent_end_angle == false
-            // u32 path_index; //NOTE: path_tangent_end_angle == true
-         // };
+         f32 end_angle;
          
          bool turns_clockwise;
 
@@ -375,6 +366,65 @@ void RecalculateAutoNode(AutoNode *node) {
    }
 }
 
+//TODO: return an error message instead of just a bool
+bool IsPathlikeDataCompatible(AutoPathlikeData *data, RobotProfile *bot) {
+   for(u32 i = 0; i < data->continuous_event_count; i++) {
+      AutoContinuousEvent *cevent = data->continuous_events + i; 
+      RobotProfileCommand *command = GetCommand(bot, cevent->subsystem_name, cevent->command_name);
+      if(command == NULL) {
+         return false;
+      } else if(command->type != North_CommandExecutionType::Continuous) {
+         return false;
+      }
+   }
+
+   for(u32 i = 0; i < data->discrete_event_count; i++) {
+      AutoDiscreteEvent *devent = data->discrete_events + i; 
+      RobotProfileCommand *command = GetCommand(bot, devent->subsystem_name, devent->command_name);
+      if(command == NULL) {
+         return false;
+      } else if((command->type != North_CommandExecutionType::NonBlocking) ||
+                (command->param_count != devent->param_count))
+      {
+         return false;
+      }
+   }
+
+   return true;
+}
+
+bool IsNodeCompatible(AutoNode *node, RobotProfile *bot) {
+   for(u32 i = 0; i < node->command_count; i++) {
+      AutoCommand *command = node->commands[i];
+      if(command->type == North_CommandType::Generic) {
+         if(GetCommand(bot, command->generic.subsystem_name, command->generic.command_name) == NULL) {
+            return false;
+         }
+      } else if(command->type == North_CommandType::Pivot) {
+         if(!IsPathlikeDataCompatible(&command->pivot.data, bot)) {
+            return false;
+         }
+      }
+   }
+
+   for(u32 i = 0; i < node->path_count; i++) {
+      AutoPath *path = node->out_paths[i];
+      
+      if(!IsPathlikeDataCompatible(&path->data, bot) || 
+         !IsNodeCompatible(path->out_node, bot))
+      {
+         return false;
+      }
+   }
+
+   return true;
+}
+
+bool IsProjectCompatible(AutoProjectLink *proj, RobotProfile *bot) {
+   return IsNodeCompatible(proj->starting_node, bot);
+}
+
+//FILE-READING----------------------------------------------
 AutoContinuousEvent ParseAutoContinuousEvent(buffer *file, MemoryArena *arena) {
    AutoContinuousEvent result = {};
    AutonomousProgram_ContinuousEvent *file_event = ConsumeStruct(file, AutonomousProgram_ContinuousEvent);
@@ -533,13 +583,13 @@ AutoProjectLink *ReadAutoProject(string file_name, MemoryArena *arena) {
    return NULL;
 }
 
-void ReadProjectsStartingAt(AutoProjectList *list, u32 field_flags, v2 pos) {
+void ReadProjectsStartingAt(AutoProjectList *list, u32 field_flags, v2 pos, RobotProfile *bot) {
    Reset(&list->arena);
    list->first = NULL;
 
    for(FileListLink *file = ListFilesWithExtension("*.ncap"); file; file = file->next) {
       AutoProjectLink *auto_proj = ReadAutoProject(file->name, &list->arena);
-      if(auto_proj) {
+      if(auto_proj && IsProjectCompatible(auto_proj, bot)) {
          //TODO: do reflecting and stuff in here
          bool valid = false;
 
@@ -554,7 +604,9 @@ void ReadProjectsStartingAt(AutoProjectList *list, u32 field_flags, v2 pos) {
       }
    }
 }
+//FILE-READING----------------------------------------------
 
+//FILE-WRITING----------------------------------------------
 void WriteAutoContinuousEvent(buffer *file, AutoContinuousEvent *event) {
    WriteStructData(file, AutonomousProgram_ContinuousEvent, event_header, {
       event_header.subsystem_name_length = event->subsystem_name.length;
@@ -683,5 +735,6 @@ void WriteProject(AutoProjectLink *project) {
    WriteAutoNode(&file, project->starting_node);
    WriteEntireFile(Concat(project->name, Literal(".ncap")), file);
 }
+//FILE-WRITING----------------------------------------------
 
 //TODO: AutoProjectLink to packet

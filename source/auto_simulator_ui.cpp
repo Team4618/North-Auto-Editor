@@ -62,14 +62,27 @@ void DrawSimField(element *page, EditorState *state) {
       element *path_panel = ColumnPanel(sim_ui, Width(Size(sim_ui).x));
       Background(path_panel, dark_grey);
       Label(path_panel, "Path", 40, WHITE);
+      
+      PathPlan *plan = state->simulator.path;
+      
       Label(path_panel, Concat(Literal("Simulation t="), ToString(state->simulator.t)), 20, WHITE);
       CheckBox(path_panel, &state->simulator.run_sim, V2(20, 20));
       Label(path_panel, Concat(Literal("Kp="), ToString(state->simulator.kp)), 20, WHITE);
-      HorizontalSlider(path_panel, &state->simulator.kp, 0, 20, V2(Size(path_panel).x, 20));
+      HorizontalSlider(path_panel, &state->simulator.kp, 0, 200, V2(Size(path_panel).x, 20));
       Label(path_panel, Concat(Literal("Drag="), ToString(state->simulator.drag)), 20, WHITE);
-      HorizontalSlider(path_panel, &state->simulator.drag, 0, 10, V2(Size(path_panel).x, 20));
+      HorizontalSlider(path_panel, &state->simulator.drag, 0, 100, V2(Size(path_panel).x, 20));
 
-      PathPlan *plan = state->simulator.path;
+      Label(path_panel, Concat(Literal("Target="), ToString(state->simulator.target_s)), 20, WHITE);
+      HorizontalSlider(path_panel, &state->simulator.target_s, 0, plan->length, V2(Size(path_panel).x, 20));
+      CheckBox(path_panel, &state->simulator.use_manual_target_s, V2(20, 20));
+
+      Label(path_panel, Concat(Literal("Left Pos="), ToString(state->simulator.state.left_p)), 20, WHITE);
+      Label(path_panel, Concat(Literal("Left Vel="), ToString(state->simulator.state.left_v)), 20, WHITE);
+      Label(path_panel, Concat(Literal("Left Setpoint="), ToString(state->simulator.state.left_setpoint)), 20, WHITE);
+      Label(path_panel, Concat(Literal("Right Pos="), ToString(state->simulator.state.right_p)), 20, WHITE);
+      Label(path_panel, Concat(Literal("Right Vel="), ToString(state->simulator.state.right_v)), 20, WHITE);
+      Label(path_panel, Concat(Literal("Right Setpoint="), ToString(state->simulator.state.right_setpoint)), 20, WHITE);
+      
       {
          u32 sample_count = 40;
          f32 step = plan->length / (sample_count - 1);
@@ -188,6 +201,22 @@ void DrawSimField(element *page, EditorState *state) {
 
       if(Button(fk_panel, "Move", menu_button).clicked) {
          state->simulator.state = new_state;
+      }
+
+      {
+         static f32 free_speed = 16;
+         static f32 stall_torque = 20;
+
+         static f32 voltage = 0;
+         static f32 speed = 0;
+         f32 torque = GetTorque(free_speed, stall_torque, speed, voltage);
+
+         Label(fk_panel, Concat(Literal("Torque = "), ToString(torque)), 20, WHITE);
+         
+         Label(fk_panel, Concat(Literal("Voltage = "), ToString(voltage)), 20, WHITE);
+         HorizontalSlider(fk_panel, &voltage, -12, 12, V2(Size(fk_panel).x - 20, 20));
+         Label(fk_panel, Concat(Literal("Speed = "), ToString(speed)), 20, WHITE);
+         HorizontalSlider(fk_panel, &speed, -1.5*free_speed, 1.5*free_speed, V2(Size(fk_panel).x - 20, 20));
       }
    }
    

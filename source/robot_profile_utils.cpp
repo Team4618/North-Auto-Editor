@@ -190,7 +190,9 @@ RobotProfileParameter *GetParameter(RobotProfileSubsystem *subsystem, string nam
 
 RobotProfileCommand *GetCommand(RobotProfile *profile, string subsystem_name, string command_name) {
    RobotProfileSubsystem *subsystem = GetSubsystem(profile, subsystem_name);
-   Assert(subsystem);
+   if(subsystem == NULL) {
+      return NULL;
+   }
 
    for(u32 i = 0; i < subsystem->command_count; i++) {
       RobotProfileCommand *command = subsystem->commands + i;

@@ -4,11 +4,11 @@
 
 #include "theme.cpp"
 
+#define INCLUDE_DRAWPROFILES
+#include "robot_profile_utils.cpp"
 #include "auto_project_utils.cpp"
 #define INCLUDE_DRAWSETTINGS
 #include "north_settings_utils.cpp"
-#define INCLUDE_DRAWPROFILES
-#include "robot_profile_utils.cpp"
 
 enum EditorPage {
    EditorPage_Home,
@@ -165,6 +165,7 @@ void initEditor(EditorState *state) {
 
    state->simulator.state.size = V2(2, 2);
    state->simulator.state.pos = V2(9, 9);
+   state->simulator.use_manual_target_s = true;
 }
 
 void reloadFiles(EditorState *state) {
@@ -198,12 +199,16 @@ void DrawOpenFileView(element *page, EditorState *state) {
          UI_SCOPE(page->context, file);
 
          //TODO: draw previews, not just buttons
+         //TODO: grey out buttons that are incompatible instead of just not working
          if(Button(page, file->name, menu_button).clicked) {
             Reset(&state->project_arena);
-            state->project = ReadAutoProject(file->name, &state->project_arena);
-            SetText(&state->project_name_box, state->project->name);
-            state->view = EditorView_Editing;
-            state->selected_type = NothingSelected;
+            AutoProjectLink *project = ReadAutoProject(file->name, &state->project_arena);
+            if(IsProjectCompatible(project, &state->profiles.current)) {
+               state->project = project;
+               SetText(&state->project_name_box, state->project->name);
+               state->view = EditorView_Editing;
+               state->selected_type = NothingSelected;
+            }
          }
       }
    } else {
