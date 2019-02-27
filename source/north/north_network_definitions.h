@@ -1,10 +1,6 @@
 #pragma pack(push, 1)
 
-/*
-NOTE:
-   Everything aside from state is sent over TCP socket 5800 
-   State is sent over UPD socket 5801
-*/
+//NOTE: Everything is sent over TCP socket 5800 
 
 struct PacketHeader {
    u32 size; //NOTE: this lets packets be really big, our practical limit is much smaller than the 4 gb limit
@@ -13,25 +9,26 @@ struct PacketHeader {
 
 namespace PacketType {
    enum type {
-      Welcome = 1,
-      CurrentParameters = 2,
-      State = 3,
-      ParameterOp = 4,
-      SetState = 5,
-      UploadAutonomous = 6,
+      SetConnectionFlags = 1,
+      Welcome = 2,
+      CurrentParameters = 3,
+      State = 4,
+      ParameterOp = 5,
+      SetState = 6,
+      UploadAutonomous = 7,
       //NOTE: if we change a packet just make a new type instead 
       //eg. "Welcome" becomes "Welcome_V1" & we create "Welcome_V2"
    };
 };
 
 //------------------------------------------
-namespace Connect_Flags {
+namespace SetConnectionFlags_Flags {
    enum type {
       WANTS_STATE = (1 << 0),
    };
 };
 
-struct Connect_PacketHeader {
+struct SetConnectionFlags_PacketHeader {
    u8 flags;
 };
 //------------------------------------------

@@ -64,33 +64,41 @@ void DrawSimField(element *page, EditorState *state) {
       Label(path_panel, "Path", 40, WHITE);
       
       PathPlan *plan = state->simulator.path;
-      
+      static f32 dt_multiplier = 1;
+
       Label(path_panel, Concat(Literal("Simulation t="), ToString(state->simulator.t)), 20, WHITE);
       CheckBox(path_panel, &state->simulator.run_sim, V2(20, 20));
-      Label(path_panel, Concat(Literal("Kp="), ToString(state->simulator.kp)), 20, WHITE);
-      HorizontalSlider(path_panel, &state->simulator.kp, 0, 200, V2(Size(path_panel).x, 20));
-      Label(path_panel, Concat(Literal("Drag="), ToString(state->simulator.drag)), 20, WHITE);
-      HorizontalSlider(path_panel, &state->simulator.drag, 0, 100, V2(Size(path_panel).x, 20));
+      HorizontalSlider(path_panel, &dt_multiplier, 0, 1.5, V2(Size(path_panel).x - 20, 20));
 
-      Label(path_panel, Concat(Literal("Target="), ToString(state->simulator.target_s)), 20, WHITE);
-      HorizontalSlider(path_panel, &state->simulator.target_s, 0, plan->length, V2(Size(path_panel).x, 20));
-      CheckBox(path_panel, &state->simulator.use_manual_target_s, V2(20, 20));
+      Label(path_panel, "Toggle Accel/Vel control", 20, WHITE);
+      CheckBox(path_panel, &state->simulator.acceleration_control, V2(20, 20));
 
       Label(path_panel, Concat(Literal("Left Pos="), ToString(state->simulator.state.left_p)), 20, WHITE);
       Label(path_panel, Concat(Literal("Left Vel="), ToString(state->simulator.state.left_v)), 20, WHITE);
-      Label(path_panel, Concat(Literal("Left Setpoint="), ToString(state->simulator.state.left_setpoint)), 20, WHITE);
+      Label(path_panel, Concat(Literal("Left Accel="), ToString(state->simulator.state.left_a)), 20, WHITE);
       Label(path_panel, Concat(Literal("Right Pos="), ToString(state->simulator.state.right_p)), 20, WHITE);
       Label(path_panel, Concat(Literal("Right Vel="), ToString(state->simulator.state.right_v)), 20, WHITE);
-      Label(path_panel, Concat(Literal("Right Setpoint="), ToString(state->simulator.state.right_setpoint)), 20, WHITE);
+      Label(path_panel, Concat(Literal("Right Accel="), ToString(state->simulator.state.right_a)), 20, WHITE);
       
       {
          u32 sample_count = 40;
          f32 step = plan->length / (sample_count - 1);
          for(u32 i = 0; i < sample_count; i++) {
-            PathPlanSample sample = {};
+            AutoPathData sample = {};
             MapLookup(&plan->map, i * step, &sample);
 
             Rectangle(field.e, RectCenterSize(GetPoint(&field, sample.pose.pos), V2(4, 4)), RED);
+         }
+      }
+
+      {
+         u32 sample_count = 40;
+         f32 step = plan->length / (sample_count - 1);
+         for(u32 i = 0; i < sample_count; i++) {
+            AutoPathData sample = {};
+            MapLookup(&plan->original_map, i * step, &sample);
+
+            Rectangle(field.e, RectCenterSize(GetPoint(&field, sample.pose.pos), V2(2, 2)), BLACK);
          }
       }
 
@@ -98,18 +106,16 @@ void DrawSimField(element *page, EditorState *state) {
          state->simulator.t = 0;
          state->simulator.run_sim = false;
 
-         PathPlanSample starting_sample = {};
+         AutoPathData starting_sample = {};
          MapLookup(&plan->map, 0, &starting_sample);
 
          state->simulator.state.pos = starting_sample.pose.pos;
          state->simulator.state.angle = starting_sample.pose.angle;
          state->simulator.state.left_p = 0;
          state->simulator.state.left_v = 0;
-         state->simulator.state.left_setpoint = 0;
-
+         
          state->simulator.state.right_p = 0;
          state->simulator.state.right_v = 0;
-         state->simulator.state.right_setpoint = 0;
       }
 
       if(Button(path_panel, "Dist Graph", menu_button).clicked) {
@@ -120,7 +126,7 @@ void DrawSimField(element *page, EditorState *state) {
          f32 step = plan->length / (sample_count - 1);
          for(u32 i = 0; i < sample_count; i++) {
             f32 curr_s = i * step;
-            PathPlanSample sample = {};
+            AutoPathData sample = {};
             MapLookup(&plan->map, curr_s, &sample);
             f32 curr_dist = Length(sample.pose.pos - curr_pose.pos);
             AddEntry(&state->simulator.graph, Literal("Dist"), curr_dist, curr_s, 1);
@@ -132,10 +138,26 @@ void DrawSimField(element *page, EditorState *state) {
 
       Label(path_panel, curr_point.on_path ? "On Path" : "Off Path", 20, WHITE);
       Label(path_panel, Concat(Literal("Current S = "), ToString(curr_point.s)), 20, WHITE);
+      Label(path_panel, Concat(Literal("Last Good S = "), ToString(state->simulator.last_s)), 20, WHITE);
       Rectangle(field.e, RectCenterSize(GetPoint(&field, curr_point.point), V2(5, 5)), curr_point.on_path ? GREEN : RED);
 
+      if(curr_point.on_path) {
+         state->simulator.last_s = curr_point.s;
+
+         AutoPathData curr_sample = GetSampleAtS(plan, curr_point.s);
+         SimRobot *bot = &state->simulator.state;
+         f32 curr_v = (bot->right_v + bot->left_v) / 2.0;
+         f32 drivebase = 2;
+
+         f32 right_v = curr_v - (drivebase / 2) * (curr_sample.dtheta_ds * curr_v);
+         f32 left_v = curr_v + (drivebase / 2) * (curr_sample.dtheta_ds * curr_v);
+
+         Label(path_panel, Concat(Literal("Left Vel Error="), ToString(left_v - bot->left_v)), 20, WHITE);
+         Label(path_panel, Concat(Literal("Right Vel Error="), ToString(right_v - bot->right_v)), 20, WHITE);
+      }
+
       if(state->simulator.run_sim) {
-         f32 dt = context->dt;
+         f32 dt = dt_multiplier * context->dt;
          state->simulator.t += dt;
 
          RunSim(&state->simulator, dt, &field);
@@ -202,22 +224,6 @@ void DrawSimField(element *page, EditorState *state) {
       if(Button(fk_panel, "Move", menu_button).clicked) {
          state->simulator.state = new_state;
       }
-
-      {
-         static f32 free_speed = 16;
-         static f32 stall_torque = 20;
-
-         static f32 voltage = 0;
-         static f32 speed = 0;
-         f32 torque = GetTorque(free_speed, stall_torque, speed, voltage);
-
-         Label(fk_panel, Concat(Literal("Torque = "), ToString(torque)), 20, WHITE);
-         
-         Label(fk_panel, Concat(Literal("Voltage = "), ToString(voltage)), 20, WHITE);
-         HorizontalSlider(fk_panel, &voltage, -12, 12, V2(Size(fk_panel).x - 20, 20));
-         Label(fk_panel, Concat(Literal("Speed = "), ToString(speed)), 20, WHITE);
-         HorizontalSlider(fk_panel, &speed, -1.5*free_speed, 1.5*free_speed, V2(Size(fk_panel).x - 20, 20));
-      }
    }
    
    FinalizeLayout(sim_ui);
@@ -230,7 +236,7 @@ void DrawSimulator(element *full_page, EditorState *state) {
    static bool show_graph = false;
    CheckBox(page, &show_graph, V2(15, 15));
    if(show_graph) {
-      MultiLineGraph(page, &state->simulator.graph, V2(Size(page).x, 500));
+      MultiLineGraph(page, &state->simulator.graph, V2(Size(page).x - 20, 500));
    }
    
    if(state->settings.field.loaded) {

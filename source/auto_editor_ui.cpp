@@ -424,7 +424,7 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
       new_path->data.velocity.datapoints[1] = { new_path->length * 0.1f, 1 };
       new_path->data.velocity.datapoints[2] = { new_path->length * 0.9f, 1 };
       new_path->data.velocity.datapoints[3] = { new_path->length, 0 };
-      RecalculateAutoPathTime(new_path);
+      RecalculatePathlikeData(&new_path->data, new_path->length);
 
       AutoPath **new_out_paths = PushArray(&state->project_arena, AutoPath *, selected_node->path_count + 1);
       Copy(selected_node->out_paths, selected_node->path_count * sizeof(AutoPath *), new_out_paths);
@@ -620,76 +620,116 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
    FinalizeLayout(edit_panel);
 }
 
+//---------------------
+//TODO: get rid of most of this
 void SimulatePath(EditorState *state, AutoPath *path) {
-   Reset(&state->simulator.arena);
-   ResetMultiLineGraph(&state->simulator.graph);
-   state->simulator.run_sim = false;
+   // Reset(&state->simulator.arena);
+   // ResetMultiLineGraph(&state->simulator.graph);
+   // state->simulator.run_sim = false;
 
-   DVTA_Data dvta = GetDVTA(&path->data.velocity);
-   f32 drivebase = state->simulator.state.size.x;
+   // DVTA_Data dvta = GetDVTA(&path->data.velocity);
+   // f32 drivebase = state->simulator.state.size.x;
 
-   PathPlan *plan = PushStruct(&state->simulator.arena, PathPlan);
-   plan->map.arena = PlatformAllocArena(Megabyte(2));
-   plan->map.sample_exp = 7;
-   plan->map.lerp_callback = path_plan_sample_lerp;
-   plan->length = path->length;
-   plan->time = dvta.t[dvta.datapoint_count - 1];
-   plan->velocity.datapoint_count = path->data.velocity.datapoint_count;
-   plan->velocity.datapoints = (North_PathDataPoint *) PushArrayCopy(&state->simulator.arena, North_PathDataPoint, path->data.velocity.datapoints, plan->velocity.datapoint_count);
+   // PathPlan *plan = PushStruct(&state->simulator.arena, PathPlan);
+   // plan->map.arena = PlatformAllocArena(Megabyte(2));
+   // plan->map.sample_exp = path->len_to_pose.sample_exp;
+   // plan->map.lerp_callback = path_plan_sample_lerp;
+   // plan->length = path->length;
+   // plan->velocity.datapoint_count = path->data.velocity.datapoint_count;
+   // plan->velocity.datapoints = (North_PathDataPoint *) PushArrayCopy(&state->simulator.arena, North_PathDataPoint, path->data.velocity.datapoints, plan->velocity.datapoint_count);
 
-   InterpolatingMapSamples samples = ResetMap(&plan->map);
-   f32 step = path->length / (samples.count - 1);
+   // plan->original_map.arena = PlatformAllocArena(Megabyte(2));
+   // plan->original_map.sample_exp = path->len_to_pose.sample_exp;
+   // plan->original_map.lerp_callback = path_plan_sample_lerp;
+   // plan->original_length = path->length;
+   // plan->original_velocity.datapoint_count = path->data.velocity.datapoint_count;
+   // plan->original_velocity.datapoints = (North_PathDataPoint *) PushArrayCopy(&state->simulator.arena, North_PathDataPoint, path->data.velocity.datapoints, plan->velocity.datapoint_count);
 
-   f32 curr_left = 0;
-   f32 curr_right = 0;
-   f32 last_s = 0;
-   for(u32 i = 0; i < samples.count; i++) {
-      f32 curr_s = step * i;
-      AutoRobotPose last_pose = GetAutoPathPose(path, last_s);
-      AutoRobotPose curr_pose = GetAutoPathPose(path, curr_s);
+   // InterpolatingMapSamples samples = ResetMap(&plan->map);
+   // InterpolatingMapSamples original_samples = ResetMap(&plan->original_map);
+   // f32 step = path->length / (samples.count - 1);
 
-      PathPlanSample *sample = PushStruct(samples.arena, PathPlanSample);
-      samples.data[i].len = curr_s;
-      samples.data[i].data_ptr = sample;
+   // for(u32 i = 0; i < samples.count; i++) {
+   //    f32 curr_s = step * i;
+   //    AutoRobotPose curr_pose = GetAutoPathPose(path, curr_s);
 
-      f32 delta_s = curr_s - last_s;
-      f32 delta_theta = ShortestAngleBetween_Radians(last_pose.angle, curr_pose.angle);
-      f32 d_left_pos = delta_s + (drivebase * delta_theta) / 2;
-      f32 d_right_pos = delta_s - (drivebase * delta_theta) / 2;
+   //    PathPlanSample *sample = PushStruct(samples.arena, PathPlanSample);
+   //    samples.data[i].len = curr_s;
+   //    samples.data[i].data_ptr = sample;
 
-      sample->pose = curr_pose;
-      sample->time = GetArrivalTimeAt(dvta, curr_s);
-      sample->left_pos = curr_left + d_left_pos;
-      sample->right_pos = curr_right + d_right_pos;
+   //    f32 dtheta_ds = 0;
+   //    f32 d2theta_ds2 = 0;
 
-      f32 dt = GetArrivalTimeAt(dvta, curr_s) - GetArrivalTimeAt(dvta, last_s);
-      sample->left_vel = (d_left_pos == 0) ? 0 : (d_left_pos / dt);
-      sample->right_vel = (d_right_pos == 0) ? 0 : (d_right_pos / dt);
-      f32 theta_dot = (delta_theta == 0) ? 0 : (delta_theta / dt);
+   //    if(i == 0) {
+   //       AutoRobotPose next_pose = GetAutoPathPose(path, curr_s + step);
+   //       dtheta_ds = ShortestAngleBetween_Radians(curr_pose.angle, next_pose.angle) / step;
+   //    } else {
+   //       AutoRobotPose last_pose = GetAutoPathPose(path, curr_s - step);
+   //       dtheta_ds = ShortestAngleBetween_Radians(last_pose.angle, curr_pose.angle) / step;
+   //    }
 
-      AddEntry(&state->simulator.graph, Literal("Left Pos"), sample->left_pos, sample->time, 1);
-      AddEntry(&state->simulator.graph, Literal("Right Pos"), sample->right_pos, sample->time, 1);
-      AddEntry(&state->simulator.graph, Literal("Left Vel"), sample->left_vel, sample->time, 2);
-      AddEntry(&state->simulator.graph, Literal("Right Vel"), sample->right_vel, sample->time, 2);
-      AddEntry(&state->simulator.graph, Literal("Vel"), GetVelocityAt(dvta, curr_s), sample->time, 2);
-      AddEntry(&state->simulator.graph, Literal("S"), curr_s, sample->time, 0);
-      AddEntry(&state->simulator.graph, Literal("Theta Dot"), theta_dot, sample->time, 3);
+   //    if((i != 0) && (i != samples.count - 1)) {
+   //       AutoRobotPose next_pose = GetAutoPathPose(path, curr_s + step);
+   //       AutoRobotPose last_pose = GetAutoPathPose(path, curr_s - step);
 
-      curr_left = sample->left_pos;
-      curr_right = sample->right_pos;
-      last_s = curr_s;
-   }
-   BuildMap(&plan->map);
+   //       d2theta_ds2 = (ShortestAngleBetween_Radians(curr_pose.angle, next_pose.angle) / step - ShortestAngleBetween_Radians(last_pose.angle, curr_pose.angle) / step) / step;
+   //    }
+      
+   //    sample->pose = curr_pose;
+   //    sample->dtheta_ds = dtheta_ds;
+   //    sample->d2theta_ds2 = d2theta_ds2;
+      
+   //    AddEntry(&state->simulator.graph, Literal("S"), curr_s, curr_s, 0);
+   //    AddEntry(&state->simulator.graph, Literal("dTheta/ds"), sample->dtheta_ds, curr_s, 3);
+   //    AddEntry(&state->simulator.graph, Literal("d^2 Theta/ds^2"), sample->d2theta_ds2, curr_s, 0);
 
-   state->simulator.pivot = NULL;
-   state->simulator.path = plan;
+   //    PathPlanSample *original_sample = PushStruct(original_samples.arena, PathPlanSample);
+   //    original_samples.data[i].len = curr_s;
+   //    original_samples.data[i].data_ptr = original_sample;
+   //    *original_sample = *sample;
+   // }
+   // BuildMap(&plan->map);
+   // BuildMap(&plan->original_map);
 
-   PathPlanSample starting_sample = {};
-   MapLookup(&plan->map, 0, &starting_sample);
+   // f32 curr_dtheta_ds = 0;
+   // for(u32 i = 0; i < samples.count; i++) {
+   //    f32 curr_s = step * i;
 
-   state->simulator.state.pos = starting_sample.pose.pos;
-   state->simulator.state.angle = starting_sample.pose.angle;
+   //    f32 drivebase = 2;
+   //    f32 curr_v = GetVelocityAt(dvta, curr_s);
+   //    f32 curr_a = GetAccelerationAt(dvta, curr_s);
+      
+   //    PathPlanSample curr_sample = {};
+   //    MapLookup(&plan->map, curr_s, &curr_sample);
+   
+   //    f32 right_v = curr_v - (drivebase / 2) * (curr_sample.dtheta_ds * curr_v);
+   //    f32 left_v = curr_v + (drivebase / 2) * (curr_sample.dtheta_ds * curr_v);
+
+   //    f32 right_a = curr_a - (drivebase / 2) * (curr_sample.d2theta_ds2 * curr_v * curr_v + curr_sample.dtheta_ds * curr_a);
+   //    f32 left_a = curr_a + (drivebase / 2) * (curr_sample.d2theta_ds2 * curr_v * curr_v + curr_sample.dtheta_ds * curr_a);
+
+   //    AddEntry(&state->simulator.graph, Literal("Accel"), curr_a, curr_s, 1);
+   //    AddEntry(&state->simulator.graph, Literal("Right A"), right_a, curr_s, 1);
+   //    AddEntry(&state->simulator.graph, Literal("Left A"), left_a, curr_s, 1);
+      
+   //    AddEntry(&state->simulator.graph, Literal("Vel"), curr_v, curr_s, 2);
+   //    AddEntry(&state->simulator.graph, Literal("Right V"), right_v, curr_s, 2);
+   //    AddEntry(&state->simulator.graph, Literal("Left V"), left_v, curr_s, 2);
+
+   //    AddEntry(&state->simulator.graph, Literal("S d2theta/ds2"), curr_dtheta_ds, curr_s, 3);
+   //    curr_dtheta_ds += curr_sample.d2theta_ds2 * step;
+   // }
+
+   // state->simulator.pivot = NULL;
+   // state->simulator.path = plan;
+
+   // PathPlanSample starting_sample = {};
+   // MapLookup(&plan->map, 0, &starting_sample);
+
+   // state->simulator.state.pos = starting_sample.pose.pos;
+   // state->simulator.state.angle = starting_sample.pose.angle;
 }
+//---------------------
 
 void DrawSelectedPath(EditorState *state, ui_field_topdown *field, bool field_clicked, element *page) {
    AutoPath *selected_path = state->selected_path;

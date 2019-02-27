@@ -66,6 +66,18 @@ f32 GetVelocityAt(DVTA_Data dvta, f32 distance) {
    return 0;
 }
 
+f32 GetAccelerationAt(DVTA_Data dvta, f32 distance) {
+   distance = Clamp(0, GetTotalLength(dvta), distance);
+   for(u32 i = 0; i < (dvta.datapoint_count - 1); i++) {
+      if((dvta.d[i] <= distance) && (distance <= dvta.d[i+1])) {
+         return dvta.a[i];
+      }
+   }
+
+   Assert(false);
+   return 0;
+}
+
 //NOTE: T(s)
 f32 GetArrivalTimeAt(DVTA_Data dvta, f32 distance) {
    distance = Clamp(0, GetTotalLength(dvta), distance);
@@ -188,6 +200,84 @@ void map_lerp_pose(InterpolatingMap_Leaf *leaf_a, InterpolatingMap_Leaf *leaf_b,
    *result = lerp(*a, t, *b);
 }
 
+v2 CubicHermiteSpline(North_HermiteControlPoint a, North_HermiteControlPoint b, f32 t) {
+   return CubicHermiteSpline(a.pos, a.tangent, b.pos, b.tangent, t);
+}
+
+v2 CubicHermiteSplineTangent(North_HermiteControlPoint a, North_HermiteControlPoint b, f32 t) {
+   return CubicHermiteSplineTangent(a.pos, a.tangent, b.pos, b.tangent, t);
+}
+
+struct AutoPathData {
+   AutoRobotPose pose;
+   f32 dtheta_ds;
+   f32 d2theta_ds2;
+};
+
+void path_data_lerp(InterpolatingMap_Leaf *leaf_a, InterpolatingMap_Leaf *leaf_b, 
+                    f32 t, void *result_in)
+{
+   AutoPathData *result = (AutoPathData *) result_in;
+   AutoPathData *a = (AutoPathData *) leaf_a->data_ptr;
+   AutoPathData *b = (AutoPathData *) leaf_b->data_ptr;
+
+   result->pose = lerp(a->pose, t, b->pose);
+   result->dtheta_ds = lerp(a->dtheta_ds, t, b->dtheta_ds);
+   result->d2theta_ds2 = lerp(a->d2theta_ds2, t, b->d2theta_ds2);
+}
+
+f32 BuildPathMap(InterpolatingMap *len_to_data, North_HermiteControlPoint *points, u32 point_count) {
+   InterpolatingMapSamples samples = ResetMap(len_to_data);
+   f32 step = (f32)(point_count - 1) / (f32)(samples.count - 1);
+   
+   f32 length = 0;
+   v2 last_pos = points[0].pos;
+   for(u32 i = 0; i < samples.count; i++) {
+      f32 t_full = step * i;
+      u32 spline_i = Clamp(0, point_count - 2, (u32) t_full);
+      v2 pos = CubicHermiteSpline(points[spline_i], points[spline_i + 1], t_full - (f32)spline_i);
+
+      AutoPathData *data = PushStruct(samples.arena, AutoPathData);
+      data->pose.pos = pos;
+      data->pose.angle = ToRadians(Angle(CubicHermiteSplineTangent(points[spline_i], points[spline_i + 1], t_full - (f32)spline_i)));
+
+      length += Length(pos - last_pos);
+      last_pos = pos;
+      
+      samples.data[i].len = length;
+      samples.data[i].data_ptr = data;
+   }
+
+   for(u32 i = 0; i < samples.count; i++) {
+      AutoPathData *data = ((AutoPathData *) samples.data[i].data_ptr);
+      AutoRobotPose curr_pose = data->pose;
+
+      f32 dtheta_ds = 0;
+      f32 d2theta_ds2 = 0;
+
+      if(i == 0) {
+         AutoRobotPose next_pose = ((AutoPathData *) samples.data[i + 1].data_ptr)->pose;
+         dtheta_ds = ShortestAngleBetween_Radians(curr_pose.angle, next_pose.angle) / step;
+      } else {
+         AutoRobotPose last_pose = ((AutoPathData *) samples.data[i - 1].data_ptr)->pose;
+         dtheta_ds = ShortestAngleBetween_Radians(last_pose.angle, curr_pose.angle) / step;
+      }
+
+      if((i != 0) && (i != samples.count - 1)) {
+         AutoRobotPose next_pose = ((AutoPathData *) samples.data[i + 1].data_ptr)->pose;
+         AutoRobotPose last_pose = ((AutoPathData *) samples.data[i - 1].data_ptr)->pose;
+
+         d2theta_ds2 = (ShortestAngleBetween_Radians(curr_pose.angle, next_pose.angle) / step - ShortestAngleBetween_Radians(last_pose.angle, curr_pose.angle) / step) / step;
+      }
+      
+      data->dtheta_ds = dtheta_ds;
+      data->d2theta_ds2 = d2theta_ds2;
+   }
+
+   BuildMap(len_to_data);
+   return length;
+}
+
 struct AutoPath {   
    AutoNode *in_node;
    v2 in_tangent;
@@ -205,14 +295,14 @@ struct AutoPath {
    u32 control_point_count;
    North_HermiteControlPoint *control_points;
 
-   InterpolatingMap len_to_pose;
+   InterpolatingMap len_to_data;
    f32 length;
 };
 
 void InitAutoPath(AutoPath *path) {
-   path->len_to_pose.arena = PlatformAllocArena(Megabyte(2));
-   path->len_to_pose.sample_exp = 7;
-   path->len_to_pose.lerp_callback = map_lerp_pose;
+   path->len_to_data.arena = PlatformAllocArena(Megabyte(2));
+   path->len_to_data.sample_exp = 7;
+   path->len_to_data.lerp_callback = path_data_lerp;
 }
 
 struct AutoProjectLink {
@@ -244,41 +334,6 @@ AutoPathSpline GetAutoPathSpline(AutoPath *path, MemoryArena *arena = &__temp_ar
    return result;
 }
 
-v2 CubicHermiteSpline(North_HermiteControlPoint a, North_HermiteControlPoint b, f32 t) {
-   return CubicHermiteSpline(a.pos, a.tangent, b.pos, b.tangent, t);
-}
-
-v2 CubicHermiteSplineTangent(North_HermiteControlPoint a, North_HermiteControlPoint b, f32 t) {
-   return CubicHermiteSplineTangent(a.pos, a.tangent, b.pos, b.tangent, t);
-}
-
-void RecalculateAutoPathLength(AutoPath *path) {
-   InterpolatingMapSamples samples = ResetMap(&path->len_to_pose);
-   AutoPathSpline spline = GetAutoPathSpline(path);
-   f32 step = (f32)(spline.point_count - 1) / (f32)(samples.count - 1);
-   
-   f32 length = 0;
-   v2 last_pos = spline.points[0].pos;
-   for(u32 i = 0; i < samples.count; i++) {
-      f32 t_full = step * i;
-      u32 spline_i = Clamp(0, spline.point_count - 2, (u32) t_full);
-      v2 pos = CubicHermiteSpline(spline.points[spline_i], spline.points[spline_i + 1], t_full - (f32)spline_i);
-
-      AutoRobotPose *curr_pose = PushStruct(samples.arena, AutoRobotPose);
-      curr_pose->pos = pos;
-      curr_pose->angle = ToRadians(Angle(CubicHermiteSplineTangent(spline.points[spline_i], spline.points[spline_i + 1], t_full - (f32)spline_i)));
-
-      length += Length(pos - last_pos);
-      last_pos = pos;
-      
-      samples.data[i].len = length;
-      samples.data[i].data_ptr = curr_pose;
-   }
-   path->length = length;
-
-   BuildMap(&path->len_to_pose);
-}
-
 f32 GetVelocityAt(AutoPathlikeData *data, f32 distance) {
    DVTA_Data dvta = GetDVTA(&data->velocity);
    return GetVelocityAt(dvta, distance);
@@ -288,38 +343,43 @@ f32 GetVelocityAt(AutoPath *path, f32 distance) {
    return GetVelocityAt(&path->data, distance); 
 }
 
-void RecalculateAutoPathTime(AutoPath *path) {
-   Assert(path->data.velocity.datapoint_count >= 2);
-   path->data.velocity.datapoints[0].distance = 0;
-   path->data.velocity.datapoints[0].value = 0;
-   path->data.velocity.datapoints[path->data.velocity.datapoint_count - 1].distance = path->length;
-   path->data.velocity.datapoints[path->data.velocity.datapoint_count - 1].value = 0;
-   for(u32 i = 0; i < path->data.velocity.datapoint_count; i++) {
-      path->data.velocity.datapoints[i].distance = Min(path->data.velocity.datapoints[i].distance, path->length);
+void RecalculateAutoPathLength(AutoPath *path) {
+   AutoPathSpline spline = GetAutoPathSpline(path);
+   path->length = BuildPathMap(&path->len_to_data, spline.points, spline.point_count);
+}
+
+void RecalculatePathlikeData(AutoPathlikeData *pathlike, f32 length) {
+   Assert(pathlike->velocity.datapoint_count >= 2);
+   pathlike->velocity.datapoints[0].distance = 0;
+   pathlike->velocity.datapoints[0].value = 0;
+   pathlike->velocity.datapoints[pathlike->velocity.datapoint_count - 1].distance = length;
+   pathlike->velocity.datapoints[pathlike->velocity.datapoint_count - 1].value = 0;
+   for(u32 i = 0; i < pathlike->velocity.datapoint_count; i++) {
+      pathlike->velocity.datapoints[i].distance = Min(pathlike->velocity.datapoints[i].distance, length);
    }
+   
+   ForEachArray(j, cevent, pathlike->continuous_event_count, pathlike->continuous_events, {
+      cevent->samples[0].distance = 0;
+      cevent->samples[cevent->sample_count - 1].distance = length;
+      for(u32 k = 0; k < cevent->sample_count; k++) {
+         cevent->samples[k].distance = Min(cevent->samples[k].distance, length);
+      }
+   });
+
+   ForEachArray(j, devent, pathlike->discrete_event_count, pathlike->discrete_events, {
+      devent->distance = Clamp(0, length, devent->distance);
+   });
 }
 
 void RecalculateAutoPath(AutoPath *path) {
    RecalculateAutoPathLength(path);
-   RecalculateAutoPathTime(path);
-
-   ForEachArray(j, cevent, path->data.continuous_event_count, path->data.continuous_events, {
-      cevent->samples[0].distance = 0;
-      cevent->samples[cevent->sample_count - 1].distance = path->length;
-      for(u32 k = 0; k < cevent->sample_count; k++) {
-         cevent->samples[k].distance = Min(cevent->samples[k].distance, path->length);
-      }
-   });
-
-   ForEachArray(j, devent, path->data.discrete_event_count, path->data.discrete_events, {
-      devent->distance = Clamp(0, path->length, devent->distance);
-   });
+   RecalculatePathlikeData(&path->data, path->length);
 }
 
 AutoRobotPose GetAutoPathPose(AutoPath *path, f32 distance) {
-   AutoRobotPose result = {};
-   MapLookup(&path->len_to_pose, distance, &result);
-   return result;
+   AutoPathData data = {};
+   MapLookup(&path->len_to_data, distance, &data);
+   return data.pose;
 }
 
 v2 GetAutoPathPoint(AutoPath *path, f32 distance) {
@@ -335,27 +395,8 @@ void RecalculateAutoNode(AutoNode *node) {
             command->pivot.start_angle = start_angle;
             f32 pivot_length = abs(AngleBetween(command->pivot.start_angle, command->pivot.end_angle, command->pivot.turns_clockwise));
 
-            Assert(command->pivot.data.velocity.datapoint_count >= 2);
-            command->pivot.data.velocity.datapoints[0].distance = 0;
-            command->pivot.data.velocity.datapoints[0].value = 0;
-            command->pivot.data.velocity.datapoints[command->pivot.data.velocity.datapoint_count - 1].distance = pivot_length;
-            command->pivot.data.velocity.datapoints[command->pivot.data.velocity.datapoint_count - 1].value = 0;
-            for(u32 j = 0; j < command->pivot.data.velocity.datapoint_count; j++) {
-               command->pivot.data.velocity.datapoints[j].distance = Min(command->pivot.data.velocity.datapoints[j].distance, pivot_length);
-            }
-
-            ForEachArray(j, cevent, command->pivot.data.continuous_event_count, command->pivot.data.continuous_events, {
-               cevent->samples[0].distance = 0;
-               cevent->samples[cevent->sample_count - 1].distance = pivot_length;
-               for(u32 k = 0; k < cevent->sample_count; k++) {
-                  cevent->samples[k].distance = Min(cevent->samples[k].distance, pivot_length);
-               }
-            });
-
-            ForEachArray(j, devent, command->pivot.data.discrete_event_count, command->pivot.data.discrete_events, {
-               devent->distance = Clamp(0, pivot_length, devent->distance);
-            });
-
+            RecalculatePathlikeData(&command->pivot.data, pivot_length);
+            
             start_angle = command->pivot.end_angle;
          }
       }

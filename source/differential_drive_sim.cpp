@@ -12,11 +12,11 @@ struct SimRobot {
    
    f32 left_p;
    f32 left_v;
-   f32 left_setpoint;
-
+   f32 left_a;
+   
    f32 right_p;
    f32 right_v;
-   f32 right_setpoint;
+   f32 right_a;
 };
 
 AutoRobotPose GetPose(SimRobot bot) {
@@ -51,36 +51,14 @@ SimRobot ForwardKinematics(SimRobot curr, f32 pr, f32 pl) {
    return result;
 }
 
-struct PathPlanSample {
-   AutoRobotPose pose;
-   f32 time;
-   f32 left_pos;
-   f32 left_vel;
-   f32 right_pos;
-   f32 right_vel;
-};
-
-void path_plan_sample_lerp(InterpolatingMap_Leaf *leaf_a, InterpolatingMap_Leaf *leaf_b, 
-                           f32 t, void *result_in)
-{
-   PathPlanSample *result = (PathPlanSample *) result_in;
-   PathPlanSample *a = (PathPlanSample *) leaf_a->data_ptr;
-   PathPlanSample *b = (PathPlanSample *) leaf_b->data_ptr;
-
-   result->pose = lerp(a->pose, t, b->pose);
-   result->time = lerp(a->time, t, b->time);
-   result->left_pos = lerp(a->left_pos, t, b->left_pos);
-   result->left_vel = lerp(a->left_vel, t, b->left_vel);
-   result->right_pos = lerp(a->right_pos, t, b->right_pos);
-   result->right_vel = lerp(a->right_vel, t, b->right_vel);
-}
-
 struct PathPlan {
+   AutoVelocityDatapoints original_velocity;
+   f32 original_length;
+   InterpolatingMap original_map;
+   
    AutoVelocityDatapoints velocity;
-
    f32 length;
-   f32 time;
-   InterpolatingMap map; //NOTE: f32 -> PathPlanSample
+   InterpolatingMap map; //NOTE: f32 -> AutoPathData
 };
 
 struct PathPoint {
@@ -89,11 +67,8 @@ struct PathPoint {
    f32 s;
 };
 
-const f32 min_path_dist = 0.5;
-const f32 min_path_heading_diff = ToRadians(10);
-
-PathPlanSample GetSampleAtS(PathPlan *plan, f32 s) {
-   PathPlanSample sample = {};
+AutoPathData GetSampleAtS(PathPlan *plan, f32 s) {
+   AutoPathData sample = {};
    MapLookup(&plan->map, s, &sample);
    return sample;
 }
@@ -106,6 +81,9 @@ f32 GetDistAtS(PathPlan *plan, f32 s, v2 pos) {
    return Length(GetPoseAtS(plan, s).pos - pos);
 }
 
+const f32 min_path_dist = 0.5;
+const f32 min_path_heading_diff = ToRadians(30);
+
 PathPoint GetCurrentPoint(PathPlan *plan, AutoRobotPose pose) {
    f32 closest_dist = F32_MAX;
    f32 closest_s = 0;
@@ -114,7 +92,7 @@ PathPoint GetCurrentPoint(PathPlan *plan, AutoRobotPose pose) {
    f32 step = plan->length / (sample_count - 1);
    for(u32 i = 0; i < sample_count; i++) {
       f32 curr_s = i * step;
-      PathPlanSample sample = {};
+      AutoPathData sample = {};
       MapLookup(&plan->map, curr_s, &sample);
       f32 curr_dist = Length(sample.pose.pos - pose.pos);
 
@@ -279,108 +257,131 @@ AdjustmentPathParams OptimizeAdjustmentPath(PathPlan *plan, AutoRobotPose pose) 
    return adj;
 }
 
-//TODO: make this better?
-f32 LookaheadDifficulty(PathPlan *plan, f32 from, f32 to, f32 drivebase) {
-   PathPlanSample start_sample = GetSampleAtS(plan, from);
-   PathPlanSample end_sample = GetSampleAtS(plan, to);
-
-   f32 d_left_p = end_sample.left_pos - start_sample.left_pos;
-   f32 d_right_p = end_sample.right_pos - start_sample.right_pos;
-
-   u32 path_sample_count = 20;
-   f32 path_step = plan->length / (path_sample_count - 1);
-   AutoRobotPose *path_samples = PushTempArray(AutoRobotPose, path_sample_count);
-   for(u32 i = 0; i < path_sample_count; i++) {
-      path_samples[i] = GetPoseAtS(plan, path_step * i);
+AutoRobotPose GetPoseAt(f32 curr_s, PathPlan *plan, InterpolatingMap *adj_pose_map, f32 adj_length, f32 adj_s_start) {
+   if(curr_s <= adj_length) {
+      AutoRobotPose curr_pose = {};
+      MapLookup(adj_pose_map, curr_s, &curr_pose);
+      return curr_pose;
+   } else {
+      f32 path_s = (curr_s - adj_length) + adj_s_start;
+      return GetPoseAtS(plan, path_s);
    }
-
-   u32 sample_count = 20;
-   f32 step = 1.0 / (sample_count - 1);
-
-   f32 result = 0;
-   for(u32 i = 0; i < sample_count; i++) {
-      f32 percent = step * i;
-      v2 new_pos = ForwardKinematics(start_sample.pose, drivebase, d_right_p * percent, d_left_p * percent).pos;
-      f32 min_dist = F32_MAX;
-
-      for(u32 j = 0; j < path_sample_count; j++) {
-         min_dist = Min(min_dist, Length(new_pos - path_samples[j].pos));
-      }
-      
-      result += min_dist;
-   }
-
-   return result;
 }
 
-f32 GetSTarget(PathPlan *plan, SimRobot bot, f32 bot_s, f32 time) {
-   f32 min_s_target = bot_s;
-   DVTA_Data dvta = GetDVTA(&plan->velocity);
-   f32 max_s_target = Clamp(min_s_target, plan->length, GetDistanceAt(dvta, time));
-   f32 s_target = 0;
-   
-   //TODO: find a reasonable value for this
-   f32 max_lookahead_difficulty = 5;
-   
-   u32 sample_count = 10;
-   f32 step = (max_s_target - min_s_target) / (sample_count - 1);
-
-   for(u32 i = 0; i < sample_count; i++) {
-      f32 curr_s = min_s_target + step * i;
-      if(LookaheadDifficulty(plan, bot_s, curr_s, bot.size.x) < max_lookahead_difficulty) {
-         s_target = curr_s;
-      } else {
-         break;
-      }
-   }
-   
-   return s_target;
-}
-
-void SimFollowLoop(PathPlan *plan, SimRobot *bot, ui_field_topdown *field, f32 time, f32 manual_s_target, bool use_manual_target) {
+bool SimFollowLoop(PathPlan *plan, SimRobot *bot, ui_field_topdown *field, f32 time, 
+                   bool acceleration_control, MultiLineGraphData *graph)
+{
    AutoRobotPose curr_pose = { bot->pos, bot->angle };
    PathPoint curr_point = GetCurrentPoint(plan, curr_pose);
    
-   if(curr_point.on_path) {
-      f32 s_target = use_manual_target ? manual_s_target : GetSTarget(plan, *bot, curr_point.s, time);
-      
-      PathPlanSample target_sample = {};
-      MapLookup(&plan->map, s_target, &target_sample);
-      Rectangle(field->e, RectCenterSize(GetPoint(field, target_sample.pose.pos), V2(5, 5)), BLACK);
-      
-      bot->left_setpoint = target_sample.left_pos;
-      bot->right_setpoint = target_sample.right_pos;
-   } else {
+   if(!curr_point.on_path) {
+      //TODO: build this using the original path, not the current path
       AdjustmentPathParams adj_params = OptimizeAdjustmentPath(plan, curr_pose);
       
       North_HermiteControlPoint A = { bot->pos, adj_params.a * DirectionNormal(ToDegrees(bot->angle)) };
       AutoRobotPose BPose = GetPoseAtS(plan, adj_params.s);
       North_HermiteControlPoint B = { BPose.pos, adj_params.b * DirectionNormal(ToDegrees(BPose.angle)) };
+      North_HermiteControlPoint adj_spline[] = { A, B };
 
       CubicHermiteSpline(field, A.pos, A.tangent, B.pos, B.tangent, BLACK, 2);
-      f32 adj_length = 0; //TODO: calculate
+      InterpolatingMap adj_pose_map = {};
+      adj_pose_map.arena = PushTempArena(Megabyte(1));
+      adj_pose_map.sample_exp = 7;
+      adj_pose_map.lerp_callback = map_lerp_pose;
+      f32 adj_length = BuildPathMap(&adj_pose_map, adj_spline, ArraySize(adj_spline));
       f32 original_path_length = plan->length - adj_params.s;
       f32 total_length = adj_length + original_path_length;
 
       TempArena temp;
       u32 sample_count = Power(2, plan->map.sample_exp);
-      PathPlanSample *new_samples = PushArray(&temp.arena, PathPlanSample, sample_count);
+      AutoPathData *new_samples = PushArray(&temp.arena, AutoPathData, sample_count);
       f32 step = total_length / (sample_count - 1);
 
       for(u32 i = 0; i < sample_count; i++) {
          f32 curr_s = i * step;
-         if(curr_s <= adj_length) {
-            //in adj path
+         AutoRobotPose curr_pose = GetPoseAt(curr_s, plan, &adj_pose_map, adj_length, adj_params.s);
+
+         f32 dtheta_ds = 0;
+         f32 d2theta_ds2 = 0;
+
+         if(i == 0) {
+            AutoRobotPose next_pose = GetPoseAt(curr_s + step, plan, &adj_pose_map, adj_length, adj_params.s);
+            dtheta_ds = ShortestAngleBetween_Radians(curr_pose.angle, next_pose.angle) / step;
          } else {
-            f32 path_s = (curr_s - adj_length) + adj_params.s;
-            //in existing path
+            AutoRobotPose last_pose = GetPoseAt(curr_s - step, plan, &adj_pose_map, adj_length, adj_params.s);
+            dtheta_ds = ShortestAngleBetween_Radians(last_pose.angle, curr_pose.angle) / step;
          }
+
+         if((i != 0) && (i != sample_count - 1)) {
+            AutoRobotPose next_pose = GetPoseAt(curr_s + step, plan, &adj_pose_map, adj_length, adj_params.s);
+            AutoRobotPose last_pose = GetPoseAt(curr_s - step, plan, &adj_pose_map, adj_length, adj_params.s);
+
+            d2theta_ds2 = (ShortestAngleBetween_Radians(curr_pose.angle, next_pose.angle) / step - ShortestAngleBetween_Radians(last_pose.angle, curr_pose.angle) / step) / step;
+         }
+
+         new_samples[i].pose = curr_pose;
+         new_samples[i].dtheta_ds = dtheta_ds;
+         new_samples[i].d2theta_ds2 = d2theta_ds2;
       }
 
-      //TODO: generate samples & build adjusted path
-      // InterpolatingMapSamples samples = ResetMap(&plan->map);
-      // BuildMap(&plan->map);
+      //TODO: rebuild velocity map
+      //TODO: output to the graph
+
+      InterpolatingMapSamples samples = ResetMap(&plan->map);
+      for(u32 i = 0; i < samples.count; i++) {
+         f32 curr_s = i * step;
+
+         AutoPathData *sample = PushStruct(samples.arena, AutoPathData);
+         *sample = new_samples[i];
+         samples.data[i].len = curr_s;
+         samples.data[i].data_ptr = sample;
+      }
+      BuildMap(&plan->map);
+
+      //TODO: reset curr_point because we just rebuilt the plan
+      curr_point = GetCurrentPoint(plan, curr_pose);
+      return true;
    }
+
+   DVTA_Data dvta = GetDVTA(&plan->velocity);
+   //TODO: using curr_point.s doesnt work too well when going around suuper tight turns
+   f32 curr_s = false ? GetDistanceAt(dvta, time) : curr_point.s;
+   // AddEntry(graph, Literal("curr_point.s"), curr_point.s, time, 0);
+   // AddEntry(graph, Literal("GetDistanceAt"), GetDistanceAt(dvta, time), time, 0);
+
+   f32 curr_v = (bot->right_v + bot->left_v) / 2.0;
+   f32 curr_a = GetAccelerationAt(dvta, curr_s);
+   
+   f32 drivebase = bot->size.x;
+   AutoPathData curr_sample = GetSampleAtS(plan, curr_s);
+   bool done = false;
+
+   if(acceleration_control) {
+      bot->right_a = curr_a - (drivebase / 2) * (curr_sample.d2theta_ds2 * curr_v * curr_v + curr_sample.dtheta_ds * curr_a);
+      bot->left_a = curr_a + (drivebase / 2) * (curr_sample.d2theta_ds2 * curr_v * curr_v + curr_sample.dtheta_ds * curr_a);
+
+      done = ((plan->length - curr_s) < 0.1) && (curr_v < 0.001);
+   } else {
+      curr_v = GetVelocityAt(dvta, curr_s);
+
+      bot->right_a = 0;
+      bot->left_a = 0;
+      bot->right_v = curr_v - (drivebase / 2) * (curr_sample.dtheta_ds * curr_v);
+      bot->left_v = curr_v + (drivebase / 2) * (curr_sample.dtheta_ds * curr_v);
+
+      done = ((plan->length - curr_s) < 0.1);
+   }
+
+   if(done) {
+      bot->right_a = 0;
+      bot->left_a = 0;
+
+      //NOTE: we'll go into hold mode, so velocity should be 0
+      bot->right_v = 0;
+      bot->left_v = 0;
+   }
+
+   return done;
 }
 
 struct PivotPlan {
@@ -396,48 +397,32 @@ struct SimulatorState {
    SimRobot state;
 
    f32 t;
+   f32 last_s;
    bool run_sim;
-   f32 kp;
-   f32 drag;
+   bool acceleration_control;
    
    PathPlan *path;
-   f32 target_s;
-   bool use_manual_target_s;
-
    PivotPlan *pivot;
 };
 
-//TODO: clean this up its such a mess
-f32 GetTorque(f32 free_speed, f32 stall_torque, f32 speed, f32 voltage) {
-   voltage = Clamp(-12.0, 12.0, voltage);
-   f32 percent_v = abs(voltage) / 12.0;
-   speed = abs((voltage > 0) ? Clamp(0, free_speed * percent_v, speed) : Clamp(-free_speed * percent_v, 0, speed));
-   return Sign(voltage) * ( stall_torque * percent_v - (stall_torque / free_speed) * speed );
-}
-
 void RunSim(SimulatorState *state, f32 dt, ui_field_topdown *field) {
    SimRobot *bot = &state->state;
-   SimFollowLoop(state->path, bot, field, state->t, state->target_s, state->use_manual_target_s);
+   bool done = SimFollowLoop(state->path, bot, field, state->t, state->acceleration_control, &state->graph);
 
-   f32 s_free = 16;
-   f32 t_stall = 40;
-
-   f32 left_voltage = state->kp * (bot->left_setpoint - bot->left_p);
-   f32 left_accel = GetTorque(s_free, t_stall, bot->left_v, left_voltage);
-   f32 d_left_p = bot->left_v * dt + 0.5 * left_accel * dt * dt;
+   f32 d_left_p = bot->left_v * dt + 0.5 * bot->left_a * dt * dt;
    bot->left_p += d_left_p;
-   bot->left_v += left_accel * dt;
+   bot->left_v += bot->left_a * dt;
    
-   f32 right_voltage = state->kp * (bot->right_setpoint - bot->right_p);
-   f32 right_accel = GetTorque(s_free, t_stall, bot->right_v, right_voltage);
-   f32 d_right_p = bot->right_v * dt + 0.5 * right_accel * dt * dt;
+   f32 d_right_p = bot->right_v * dt + 0.5 * bot->right_a * dt * dt;
    bot->right_p += d_right_p;
-   bot->right_v += right_accel * dt;
-
-   //TODO: this drag/friction stuff is totally wrong
-   bot->left_v -= (bot->left_v > 0 ? 1 : -1) * state->drag * dt;
-   bot->right_v -= (bot->right_v > 0 ? 1 : -1) * state->drag * dt;
+   bot->right_v += bot->right_a * dt;
 
    *bot = ForwardKinematics(*bot, d_left_p, d_right_p);
-   bot->pos = ClampTo(bot->pos, RectCenterSize(V2(0, 0), field->size_in_ft));
+   if(!Contains(RectCenterSize(V2(0, 0), field->size_in_ft), bot->pos)) {
+      bot->pos = ClampTo(bot->pos, RectCenterSize(V2(0, 0), field->size_in_ft));
+      bot->right_v = 0;
+      bot->left_v = 0;
+   }
+
+   state->run_sim = !done;
 }

@@ -165,7 +165,6 @@ void initEditor(EditorState *state) {
 
    state->simulator.state.size = V2(2, 2);
    state->simulator.state.pos = V2(9, 9);
-   state->simulator.use_manual_target_s = true;
 }
 
 void reloadFiles(EditorState *state) {

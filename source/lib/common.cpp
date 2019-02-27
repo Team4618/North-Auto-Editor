@@ -168,8 +168,10 @@ struct MemoryArenaBlock {
    u8 *memory;
 };
 
+typedef MemoryArenaBlock *(*alloc_arena_block_callback)(u64 size);
 struct MemoryArena {
    u64 initial_size;
+   alloc_arena_block_callback alloc_block;
 
    bool valid;
    MemoryArena *parent;
@@ -180,7 +182,6 @@ struct MemoryArena {
    MemoryArenaBlock *curr_block;
 };
 
-MemoryArenaBlock *PlatformAllocArenaBlock(u64 size);
 u8 *PushSize(MemoryArena *arena, u64 size) {
    Assert(arena->valid);
 
@@ -188,7 +189,7 @@ u8 *PushSize(MemoryArena *arena, u64 size) {
    if(curr_block->size <= (size + curr_block->used)) {
       if(curr_block->next == NULL) {
          //TODO: what size should we allocate?
-         MemoryArenaBlock *new_block = PlatformAllocArenaBlock(Max(arena->initial_size, size));
+         MemoryArenaBlock *new_block = arena->alloc_block(Max(arena->initial_size, size));
          
          curr_block->next = new_block;
          arena->curr_block = new_block;
@@ -337,6 +338,25 @@ struct TempArena {
 #define PushTempArray(struct, length) (struct *) PushSize(&__temp_arena, (length) * sizeof(struct))
 #define PushTempCopy(string) PushCopy(&__temp_arena, (string))
 #define PushTempBuffer(size) PushBuffer(&__temp_arena, (size))
+
+MemoryArenaBlock *PushTempBlock(u64 size) {
+   MemoryArenaBlock *result = (MemoryArenaBlock *) PushSize(&__temp_arena, sizeof(MemoryArenaBlock) + size);
+   result->size = size;
+   result->used = 0;
+   result->next = NULL;
+   result->memory = (u8 *) (result + 1);
+   return result;
+}
+
+MemoryArena PushTempArena(u32 size) {
+   MemoryArena result = {};
+   result.first_block = PushTempBlock(size);
+   result.curr_block = result.first_block;
+   result.initial_size = size;
+   result.valid = true;
+   result.alloc_block = PushTempBlock;
+   return result;
+}
 
 //--------------REWRITE THIS ASAP-----------------
 //------------------------------------------------
@@ -969,6 +989,7 @@ u32 arena_blocks_allocated = 0;
          result.curr_block = result.first_block;
          result.initial_size = initial_size;
          result.valid = true;
+         result.alloc_block = PlatformAllocArenaBlock;
          return result;
       }
 
