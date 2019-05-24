@@ -61,6 +61,7 @@ struct PathPlan {
    InterpolatingMap map; //NOTE: f32 -> AutoPathData
 };
 
+
 struct PathPoint {
    bool on_path;
    v2 point;
@@ -384,16 +385,16 @@ bool SimFollowLoop(PathPlan *plan, SimRobot *bot, ui_field_topdown *field, f32 t
    return done;
 }
 
-struct PivotPlan {
-   //NOTE: Theta(t) = (clockwise ? 1 : -1) * GetDistanceAt + start_angle
-   AutoVelocityDatapoints velocity;
-   f32 start_angle;
-   bool clockwise;
-};
+// struct PivotPlan {
+//    //NOTE: Theta(t) = (clockwise ? 1 : -1) * GetDistanceAt + start_angle
+//    AutoVelocityDatapoints velocity;
+//    f32 start_angle;
+//    bool clockwise;
+// };
 
 struct SimulatorState {
    MultiLineGraphData graph;
-   MemoryArena arena;
+   MemoryArena *arena;
    SimRobot state;
 
    f32 t;
@@ -402,7 +403,7 @@ struct SimulatorState {
    bool acceleration_control;
    
    PathPlan *path;
-   PivotPlan *pivot;
+   // PivotPlan *pivot;
 };
 
 void RunSim(SimulatorState *state, f32 dt, ui_field_topdown *field) {

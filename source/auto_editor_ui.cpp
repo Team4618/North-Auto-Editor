@@ -171,13 +171,13 @@ ui_pathlike_editor DrawPathlikeDataEditor(EditorState *state, element *parent, R
       new_datapoint.value = (data->velocity.datapoints[new_velocity_sample_i - 1].value + data->velocity.datapoints[new_velocity_sample_i].value) / 2;
       
       data->velocity.datapoints = 
-                     ArrayInsert(&state->project_arena, North_PathDataPoint, data->velocity.datapoints,
+                     ArrayInsert(state->project_arena, North_PathDataPoint, data->velocity.datapoints,
                                  new_velocity_sample_i, &new_datapoint, data->velocity.datapoint_count++);
       
       result.recalculate = true;
    } else if(remove_velocity_sample) {
       data->velocity.datapoints = 
-         ArrayRemove(&state->project_arena, North_PathDataPoint, data->velocity.datapoints,
+         ArrayRemove(state->project_arena, North_PathDataPoint, data->velocity.datapoints,
                      remove_velocity_sample_i, data->velocity.datapoint_count--);
 
       result.recalculate = true;
@@ -188,12 +188,12 @@ ui_pathlike_editor DrawPathlikeDataEditor(EditorState *state, element *parent, R
 
    ForEachArray(i, cevent, data->continuous_event_count, data->continuous_events, {
       UI_SCOPE(graph, cevent);
-      v4 line_colour = GetCommand(profile, cevent->subsystem_name, cevent->command_name)->colour;
+      v4 line_colour = GetCommand(profile, cevent->command_name)->colour;
       
       element *cevent_panel = RowPanel(parent, Size(Size(parent).x - 10, 40).Captures(INTERACTION_HOT));
       Background(cevent_panel, dark_grey);
       Outline(cevent_panel, IsHot(cevent_panel) ? V4(120/255.0, 120/255.0, 120/255.0, 1) : light_grey);
-      Label(cevent_panel, Concat(cevent->subsystem_name, Literal(":"), cevent->command_name), 40, line_colour);
+      Label(cevent_panel, cevent->command_name, 40, line_colour);
       if(Button(cevent_panel, "Hide", menu_button.IsSelected(cevent->hidden)).clicked) {
          cevent->hidden = !cevent->hidden;
       }
@@ -241,12 +241,12 @@ ui_pathlike_editor DrawPathlikeDataEditor(EditorState *state, element *parent, R
             new_datapoint.distance = (cevent->samples[add_sample_i - 1].distance + cevent->samples[add_sample_i].distance) / 2;
             new_datapoint.value = (cevent->samples[add_sample_i - 1].value + cevent->samples[add_sample_i].value) / 2;
             
-            cevent->samples = ArrayInsert(&state->project_arena, North_PathDataPoint, cevent->samples,
+            cevent->samples = ArrayInsert(state->project_arena, North_PathDataPoint, cevent->samples,
                                           add_sample_i, &new_datapoint, cevent->sample_count++);
 
             result.recalculate = true;
          } else if(remove_sample) {
-            cevent->samples = ArrayRemove(&state->project_arena, North_PathDataPoint, cevent->samples,
+            cevent->samples = ArrayRemove(state->project_arena, North_PathDataPoint, cevent->samples,
                                           remove_sample_i, cevent->sample_count--);
 
             result.recalculate = true;
@@ -256,7 +256,7 @@ ui_pathlike_editor DrawPathlikeDataEditor(EditorState *state, element *parent, R
 
    if(remove_cevent) {
       data->continuous_events =
-         ArrayRemove(&state->project_arena, AutoContinuousEvent, data->continuous_events,
+         ArrayRemove(state->project_arena, AutoContinuousEvent, data->continuous_events,
                      remove_cevent_i, data->continuous_event_count--);
    }
 
@@ -264,7 +264,7 @@ ui_pathlike_editor DrawPathlikeDataEditor(EditorState *state, element *parent, R
    u32 remove_devent_i = 0;
 
    ForEachArray(i, devent, data->discrete_event_count, data->discrete_events, {
-      RobotProfileCommand *command_template = GetCommand(profile, devent->subsystem_name, devent->command_name);
+      RobotProfileCommand *command_template = GetCommand(profile, devent->command_name);
       Assert(command_template);
       
       UI_SCOPE(parent, devent);
@@ -276,7 +276,7 @@ ui_pathlike_editor DrawPathlikeDataEditor(EditorState *state, element *parent, R
          remove_devent_i = i;
       }
 
-      string text = Concat(devent->subsystem_name, Literal(":"), devent->command_name, Literal("@"), ToString(devent->distance));
+      string text = Concat(devent->command_name, Literal("@"), ToString(devent->distance));
       Label(devent_panel, text, 20, WHITE);
       for(u32 j = 0; j < command_template->param_count; j++) {
          f32 *param_value = devent->params + j;
@@ -292,60 +292,54 @@ ui_pathlike_editor DrawPathlikeDataEditor(EditorState *state, element *parent, R
 
    if(remove_devent) {
       data->discrete_events =
-         ArrayRemove(&state->project_arena, AutoDiscreteEvent, data->discrete_events,
+         ArrayRemove(state->project_arena, AutoDiscreteEvent, data->discrete_events,
                      remove_devent_i, data->discrete_event_count--);
    }
 
-   for(u32 i = 0; i < profile->subsystem_count; i++) {
-      RobotProfileSubsystem *subsystem = profile->subsystems + i;
-      
-      for(u32 j = 0; j < subsystem->command_count; j++) {
-         RobotProfileCommand *command = subsystem->commands + j;
-         UI_SCOPE(parent, command);
+   for(u32 j = 0; j < profile->command_count; j++) {
+      RobotProfileCommand *command = profile->commands + j;
+      UI_SCOPE(parent, command);
 
-         if(command->type == North_CommandExecutionType::Continuous) {
-            bool already_has_line = false;
+      if(command->type == North_CommandExecutionType::Continuous) {
+         bool already_has_line = false;
 
-            for(u32 k = 0; k < data->continuous_event_count; k++) {
-               AutoContinuousEvent *cevent = data->continuous_events + k;
-               if((cevent->subsystem_name == subsystem->name) && (cevent->command_name == command->name)) {
-                  already_has_line = true;
-                  break;
-               }
-            }
-
-            if(!already_has_line) {
-               if(Button(parent, Concat(Literal("C "), subsystem->name, Literal(":"), command->name), menu_button).clicked) {
-                  AutoContinuousEvent new_cevent = {};
-                  new_cevent.subsystem_name = PushCopy(&state->project_arena, subsystem->name);
-                  new_cevent.command_name = PushCopy(&state->project_arena, command->name);
-                  new_cevent.sample_count = 3;
-                  new_cevent.samples = PushArray(&state->project_arena, North_PathDataPoint, new_cevent.sample_count);
-
-                  new_cevent.samples[0] = { 0, 0 };
-                  new_cevent.samples[1] = { path_length * 0.5f, 5 };
-                  new_cevent.samples[2] = { path_length, 10 };
-
-                  data->continuous_events = 
-                     ArrayInsert(&state->project_arena, AutoContinuousEvent, data->continuous_events,
-                                 0, &new_cevent, data->continuous_event_count++);
-               }
-            }
-         } else if(command->type == North_CommandExecutionType::NonBlocking) {
-            if(Button(parent, Concat(Literal("D "), subsystem->name, Literal(":"), command->name), menu_button).clicked) {
-               AutoDiscreteEvent new_event = {};
-               new_event.subsystem_name = PushCopy(&state->project_arena, subsystem->name);
-               new_event.command_name = PushCopy(&state->project_arena, command->name);
-               new_event.param_count = command->param_count;
-               new_event.params = PushArray(&state->project_arena, f32, command->param_count);
-               
-               data->discrete_events = 
-                  ArrayInsert(&state->project_arena, AutoDiscreteEvent, data->discrete_events,
-                              0, &new_event, data->discrete_event_count++);
+         for(u32 k = 0; k < data->continuous_event_count; k++) {
+            AutoContinuousEvent *cevent = data->continuous_events + k;
+            if(cevent->command_name == command->name) {
+               already_has_line = true;
+               break;
             }
          }
-      };
-   };
+
+         if(!already_has_line) {
+            if(Button(parent, Concat(Literal("C "), command->name), menu_button).clicked) {
+               AutoContinuousEvent new_cevent = {};
+               new_cevent.command_name = PushCopy(state->project_arena, command->name);
+               new_cevent.sample_count = 3;
+               new_cevent.samples = PushArray(state->project_arena, North_PathDataPoint, new_cevent.sample_count);
+
+               new_cevent.samples[0] = { 0, 0 };
+               new_cevent.samples[1] = { path_length * 0.5f, 5 };
+               new_cevent.samples[2] = { path_length, 10 };
+
+               data->continuous_events = 
+                  ArrayInsert(state->project_arena, AutoContinuousEvent, data->continuous_events,
+                              0, &new_cevent, data->continuous_event_count++);
+            }
+         }
+      } else if(command->type == North_CommandExecutionType::NonBlocking) {
+         if(Button(parent, Concat(Literal("D "), command->name), menu_button).clicked) {
+            AutoDiscreteEvent new_event = {};
+            new_event.command_name = PushCopy(state->project_arena, command->name);
+            new_event.param_count = command->param_count;
+            new_event.params = PushArray(state->project_arena, f32, command->param_count);
+            
+            data->discrete_events = 
+               ArrayInsert(state->project_arena, AutoDiscreteEvent, data->discrete_events,
+                           0, &new_event, data->discrete_event_count++);
+         }
+      }
+   }
 
    return result;
 }
@@ -387,10 +381,10 @@ void DrawPivotCommandEditor(EditorState *state, AutoCommand *command, element *c
       Rectangle(compass, RectCenterSize(Center(compass) + 50 * DirectionNormal(command->pivot.start_angle + cursor_d), V2(5, 5)), BLACK);
    }
 
-   if(Button(command_panel, "Sim", menu_button).clicked) {
-      ResetMultiLineGraph(&state->simulator.graph);
-      // SimulatePivot(state, command);
-   }
+   // if(Button(command_panel, "Sim", menu_button).clicked) {
+   //    ResetMultiLineGraph(&state->simulator.graph);
+   //    // SimulatePivot(state, command);
+   // }
 }
 
 void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_clicked, element *page) {
@@ -398,8 +392,8 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
    RobotProfile *profile = &state->profiles.current;
    
    if(field_clicked) {
-      AutoPath *new_path = PushStruct(&state->project_arena, AutoPath);
-      AutoNode *new_node = PushStruct(&state->project_arena, AutoNode);
+      AutoPath *new_path = PushStruct(state->project_arena, AutoPath);
+      AutoNode *new_node = PushStruct(state->project_arena, AutoNode);
       
       new_node->pos = PixelsToFeet(field, Cursor(field->e) - field->bounds.min) - 0.5 * field->size_in_ft;
       new_node->in_path = new_path;
@@ -419,14 +413,14 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
       
       RecalculateAutoPathLength(new_path);
       new_path->data.velocity.datapoint_count = 4;
-      new_path->data.velocity.datapoints = PushArray(&state->project_arena, North_PathDataPoint, 4);
+      new_path->data.velocity.datapoints = PushArray(state->project_arena, North_PathDataPoint, 4);
       new_path->data.velocity.datapoints[0] = { 0, 0 };
       new_path->data.velocity.datapoints[1] = { new_path->length * 0.1f, 1 };
       new_path->data.velocity.datapoints[2] = { new_path->length * 0.9f, 1 };
       new_path->data.velocity.datapoints[3] = { new_path->length, 0 };
       RecalculatePathlikeData(&new_path->data, new_path->length);
 
-      AutoPath **new_out_paths = PushArray(&state->project_arena, AutoPath *, selected_node->path_count + 1);
+      AutoPath **new_out_paths = PushArray(state->project_arena, AutoPath *, selected_node->path_count + 1);
       Copy(selected_node->out_paths, selected_node->path_count * sizeof(AutoPath *), new_out_paths);
       new_out_paths[selected_node->path_count] = new_path;
 
@@ -456,7 +450,7 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
          }
 
          Assert(remove_index != -1);
-         AutoPath **new_out_paths = PushArray(&state->project_arena, AutoPath *, parent->path_count - 1);
+         AutoPath **new_out_paths = PushArray(state->project_arena, AutoPath *, parent->path_count - 1);
 
          u32 before_count = remove_index;
          Copy(parent->out_paths, before_count * sizeof(AutoPath *), new_out_paths);
@@ -487,50 +481,47 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
          //TODO: replace this with ui_list_selector
          for(u32 j = 0; j < profile->conditional_count; j++) {
             if(Button(path_panel, profile->conditionals[j], menu_button.IsSelected(profile->conditionals[j] == curr_path->conditional)).clicked) {
-               curr_path->conditional = PushCopy(&state->project_arena, profile->conditionals[j]);
+               curr_path->conditional = PushCopy(state->project_arena, profile->conditionals[j]);
             }
          }
       }
    });
 
    if(Button(available_command_list, "Wait", menu_button).clicked) {
-      AutoCommand *new_command = PushStruct(&state->project_arena, AutoCommand);
+      AutoCommand *new_command = PushStruct(state->project_arena, AutoCommand);
       new_command->type = North_CommandType::Wait;
       new_command->wait.duration = 0;
       
       selected_node->commands =
-         ArrayInsert(&state->project_arena, AutoCommand *, selected_node->commands,
+         ArrayInsert(state->project_arena, AutoCommand *, selected_node->commands,
                      selected_node->command_count - 1, &new_command, selected_node->command_count++);
    }
 
    if(selected_node != state->project->starting_node) {
       if(Button(available_command_list, "Pivot", menu_button).clicked) {
-         AutoCommand *new_command = PushStruct(&state->project_arena, AutoCommand);
+         AutoCommand *new_command = PushStruct(state->project_arena, AutoCommand);
          new_command->type = North_CommandType::Pivot;
          new_command->pivot.data.velocity.datapoint_count = 4;
-         new_command->pivot.data.velocity.datapoints = PushArray(&state->project_arena, North_PathDataPoint, new_command->pivot.data.velocity.datapoint_count);
+         new_command->pivot.data.velocity.datapoints = PushArray(state->project_arena, North_PathDataPoint, new_command->pivot.data.velocity.datapoint_count);
 
          selected_node->commands =
-            ArrayInsert(&state->project_arena, AutoCommand *, selected_node->commands,
+            ArrayInsert(state->project_arena, AutoCommand *, selected_node->commands,
                         selected_node->command_count - 1, &new_command, selected_node->command_count++);
       }
    }
 
-   ForEachArray(i, subsystem, profile->subsystem_count, profile->subsystems, {
-      ForEachArray(j, command, subsystem->command_count, subsystem->commands, {
-         if(Button(available_command_list, Concat(subsystem->name, Literal(":"), command->name), menu_button).clicked) {
-            AutoCommand *new_command = PushStruct(&state->project_arena, AutoCommand);
-            new_command->type = North_CommandType::Generic;
-            new_command->generic.subsystem_name = PushCopy(&state->project_arena, subsystem->name);
-            new_command->generic.command_name = PushCopy(&state->project_arena, command->name);
-            new_command->generic.param_count = command->param_count;
-            new_command->generic.params = PushArray(&state->project_arena, f32, command->param_count);
+   ForEachArray(j, command, profile->command_count, profile->commands, {
+      if(Button(available_command_list, command->name, menu_button).clicked) {
+         AutoCommand *new_command = PushStruct(state->project_arena, AutoCommand);
+         new_command->type = North_CommandType::Generic;
+         new_command->generic.command_name = PushCopy(state->project_arena, command->name);
+         new_command->generic.param_count = command->param_count;
+         new_command->generic.params = PushArray(state->project_arena, f32, command->param_count);
 
-            selected_node->commands =
-               ArrayInsert(&state->project_arena, AutoCommand *, selected_node->commands,
-                           selected_node->command_count - 1, &new_command, selected_node->command_count++); 
-         }
-      });
+         selected_node->commands =
+            ArrayInsert(state->project_arena, AutoCommand *, selected_node->commands,
+                        selected_node->command_count - 1, &new_command, selected_node->command_count++); 
+      }
    });
 
    bool remove_command = false;
@@ -577,10 +568,10 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
 
       switch(command->type) {
          case North_CommandType::Generic: {
-            RobotProfileCommand *command_template = GetCommand(profile, command->generic.subsystem_name, command->generic.command_name);
+            RobotProfileCommand *command_template = GetCommand(profile, command->generic.command_name);
             Assert(command_template);
       
-            Label(button_row, Concat(command->generic.subsystem_name, Literal(":"), command->generic.command_name), 20, WHITE);
+            Label(button_row, command->generic.command_name, 20, WHITE);
             for(u32 j = 0; j < command_template->param_count; j++) {
                f32 *param_value = command->generic.params + j;
                UI_SCOPE(command_panel->context, param_value);
@@ -610,7 +601,7 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
 
    if(remove_command) {
       selected_node->commands =
-               ArrayRemove(&state->project_arena, AutoCommand *, selected_node->commands,
+               ArrayRemove(state->project_arena, AutoCommand *, selected_node->commands,
                            remove_index, selected_node->command_count--); 
    } else if(move_command) {
       ArrayMove(AutoCommand *, selected_node->commands, selected_node->command_count,
@@ -620,116 +611,102 @@ void DrawSelectedNode(EditorState *state, ui_field_topdown *field, bool field_cl
    FinalizeLayout(edit_panel);
 }
 
-//---------------------
-//TODO: get rid of most of this
+/*
 void SimulatePath(EditorState *state, AutoPath *path) {
-   // Reset(&state->simulator.arena);
-   // ResetMultiLineGraph(&state->simulator.graph);
-   // state->simulator.run_sim = false;
+   Reset(state->simulator.arena);
+   ResetMultiLineGraph(&state->simulator.graph);
+   state->simulator.run_sim = false;
 
-   // DVTA_Data dvta = GetDVTA(&path->data.velocity);
-   // f32 drivebase = state->simulator.state.size.x;
+   DVTA_Data dvta = GetDVTA(&path->data.velocity);
+   f32 drivebase = state->simulator.state.size.x;
 
-   // PathPlan *plan = PushStruct(&state->simulator.arena, PathPlan);
-   // plan->map.arena = PlatformAllocArena(Megabyte(2));
-   // plan->map.sample_exp = path->len_to_pose.sample_exp;
-   // plan->map.lerp_callback = path_plan_sample_lerp;
-   // plan->length = path->length;
-   // plan->velocity.datapoint_count = path->data.velocity.datapoint_count;
-   // plan->velocity.datapoints = (North_PathDataPoint *) PushArrayCopy(&state->simulator.arena, North_PathDataPoint, path->data.velocity.datapoints, plan->velocity.datapoint_count);
+   PathPlan *plan = PushStruct(state->simulator.arena, PathPlan);
+   plan->map.arena = PlatformAllocArena(Megabyte(2), "Map Arena");
+   plan->map.sample_exp = path->len_to_data.sample_exp;
+   plan->map.lerp_callback = path_data_lerp;
+   plan->length = path->length;
+   plan->velocity.datapoint_count = path->data.velocity.datapoint_count;
+   plan->velocity.datapoints = (North_PathDataPoint *) PushArrayCopy(state->simulator.arena, North_PathDataPoint, path->data.velocity.datapoints, plan->velocity.datapoint_count);
 
-   // plan->original_map.arena = PlatformAllocArena(Megabyte(2));
-   // plan->original_map.sample_exp = path->len_to_pose.sample_exp;
-   // plan->original_map.lerp_callback = path_plan_sample_lerp;
-   // plan->original_length = path->length;
-   // plan->original_velocity.datapoint_count = path->data.velocity.datapoint_count;
-   // plan->original_velocity.datapoints = (North_PathDataPoint *) PushArrayCopy(&state->simulator.arena, North_PathDataPoint, path->data.velocity.datapoints, plan->velocity.datapoint_count);
+   plan->original_map.arena = PlatformAllocArena(Megabyte(2), "Original Map Arena");
+   plan->original_map.sample_exp = path->len_to_data.sample_exp;
+   plan->original_map.lerp_callback = path_data_lerp;
+   plan->original_length = path->length;
+   plan->original_velocity.datapoint_count = path->data.velocity.datapoint_count;
+   plan->original_velocity.datapoints = (North_PathDataPoint *) PushArrayCopy(state->simulator.arena, North_PathDataPoint, path->data.velocity.datapoints, plan->velocity.datapoint_count);
 
-   // InterpolatingMapSamples samples = ResetMap(&plan->map);
-   // InterpolatingMapSamples original_samples = ResetMap(&plan->original_map);
-   // f32 step = path->length / (samples.count - 1);
-
-   // for(u32 i = 0; i < samples.count; i++) {
-   //    f32 curr_s = step * i;
-   //    AutoRobotPose curr_pose = GetAutoPathPose(path, curr_s);
-
-   //    PathPlanSample *sample = PushStruct(samples.arena, PathPlanSample);
-   //    samples.data[i].len = curr_s;
-   //    samples.data[i].data_ptr = sample;
-
-   //    f32 dtheta_ds = 0;
-   //    f32 d2theta_ds2 = 0;
-
-   //    if(i == 0) {
-   //       AutoRobotPose next_pose = GetAutoPathPose(path, curr_s + step);
-   //       dtheta_ds = ShortestAngleBetween_Radians(curr_pose.angle, next_pose.angle) / step;
-   //    } else {
-   //       AutoRobotPose last_pose = GetAutoPathPose(path, curr_s - step);
-   //       dtheta_ds = ShortestAngleBetween_Radians(last_pose.angle, curr_pose.angle) / step;
-   //    }
-
-   //    if((i != 0) && (i != samples.count - 1)) {
-   //       AutoRobotPose next_pose = GetAutoPathPose(path, curr_s + step);
-   //       AutoRobotPose last_pose = GetAutoPathPose(path, curr_s - step);
-
-   //       d2theta_ds2 = (ShortestAngleBetween_Radians(curr_pose.angle, next_pose.angle) / step - ShortestAngleBetween_Radians(last_pose.angle, curr_pose.angle) / step) / step;
-   //    }
-      
-   //    sample->pose = curr_pose;
-   //    sample->dtheta_ds = dtheta_ds;
-   //    sample->d2theta_ds2 = d2theta_ds2;
-      
-   //    AddEntry(&state->simulator.graph, Literal("S"), curr_s, curr_s, 0);
-   //    AddEntry(&state->simulator.graph, Literal("dTheta/ds"), sample->dtheta_ds, curr_s, 3);
-   //    AddEntry(&state->simulator.graph, Literal("d^2 Theta/ds^2"), sample->d2theta_ds2, curr_s, 0);
-
-   //    PathPlanSample *original_sample = PushStruct(original_samples.arena, PathPlanSample);
-   //    original_samples.data[i].len = curr_s;
-   //    original_samples.data[i].data_ptr = original_sample;
-   //    *original_sample = *sample;
-   // }
-   // BuildMap(&plan->map);
-   // BuildMap(&plan->original_map);
-
-   // f32 curr_dtheta_ds = 0;
-   // for(u32 i = 0; i < samples.count; i++) {
-   //    f32 curr_s = step * i;
-
-   //    f32 drivebase = 2;
-   //    f32 curr_v = GetVelocityAt(dvta, curr_s);
-   //    f32 curr_a = GetAccelerationAt(dvta, curr_s);
-      
-   //    PathPlanSample curr_sample = {};
-   //    MapLookup(&plan->map, curr_s, &curr_sample);
+   InterpolatingMapSamples samples = ResetMap(&plan->map);
+   InterpolatingMapSamples original_samples = ResetMap(&plan->original_map);
    
-   //    f32 right_v = curr_v - (drivebase / 2) * (curr_sample.dtheta_ds * curr_v);
-   //    f32 left_v = curr_v + (drivebase / 2) * (curr_sample.dtheta_ds * curr_v);
+   for(u32 i = 0; i < samples.count; i++) {
+      f32 distance = path->len_to_data.samples[i].len;
+      AutoPathData *data = (AutoPathData *) path->len_to_data.samples[i].data_ptr;
 
-   //    f32 right_a = curr_a - (drivebase / 2) * (curr_sample.d2theta_ds2 * curr_v * curr_v + curr_sample.dtheta_ds * curr_a);
-   //    f32 left_a = curr_a + (drivebase / 2) * (curr_sample.d2theta_ds2 * curr_v * curr_v + curr_sample.dtheta_ds * curr_a);
+      samples.data[i].len = distance;
+      AutoPathData *sample1 = PushStruct(samples.arena, AutoPathData);
+      *sample1 = *data;
+      samples.data[i].data_ptr = sample1;
 
-   //    AddEntry(&state->simulator.graph, Literal("Accel"), curr_a, curr_s, 1);
-   //    AddEntry(&state->simulator.graph, Literal("Right A"), right_a, curr_s, 1);
-   //    AddEntry(&state->simulator.graph, Literal("Left A"), left_a, curr_s, 1);
+      original_samples.data[i].len = distance;
+      AutoPathData *sample2 = PushStruct(original_samples.arena, AutoPathData);
+      *sample2 = *data;
+      original_samples.data[i].data_ptr = sample2;
+   }
+
+   BuildMap(&plan->map);
+   BuildMap(&plan->original_map);
+
+   //---------------------------------------------
+   f32 step = path->length / (f32)(samples.count - 1); 
+   f32 curr_dtheta_ds = 0;
+   for(u32 i = 0; i < samples.count; i++) {
+      f32 curr_s = step * i;
+
+      f32 drivebase = 2;
+      f32 curr_v = GetVelocityAt(dvta, curr_s);
+      f32 curr_a = GetAccelerationAt(dvta, curr_s);
       
-   //    AddEntry(&state->simulator.graph, Literal("Vel"), curr_v, curr_s, 2);
-   //    AddEntry(&state->simulator.graph, Literal("Right V"), right_v, curr_s, 2);
-   //    AddEntry(&state->simulator.graph, Literal("Left V"), left_v, curr_s, 2);
+      AutoPathData curr_sample = {};
+      MapLookup(&plan->map, curr_s, &curr_sample);
+   
+      f32 right_v = curr_v - (drivebase / 2) * (curr_sample.dtheta_ds * curr_v);
+      f32 left_v = curr_v + (drivebase / 2) * (curr_sample.dtheta_ds * curr_v);
 
-   //    AddEntry(&state->simulator.graph, Literal("S d2theta/ds2"), curr_dtheta_ds, curr_s, 3);
-   //    curr_dtheta_ds += curr_sample.d2theta_ds2 * step;
-   // }
+      f32 right_a = curr_a - (drivebase / 2) * (curr_sample.d2theta_ds2 * curr_v * curr_v + curr_sample.dtheta_ds * curr_a);
+      f32 left_a = curr_a + (drivebase / 2) * (curr_sample.d2theta_ds2 * curr_v * curr_v + curr_sample.dtheta_ds * curr_a);
+
+      AddEntry(&state->simulator.graph, Literal("Accel"), curr_a, curr_s, 1);
+      AddEntry(&state->simulator.graph, Literal("Right A"), right_a, curr_s, 1);
+      AddEntry(&state->simulator.graph, Literal("Left A"), left_a, curr_s, 1);
+      
+      AddEntry(&state->simulator.graph, Literal("Vel"), curr_v, curr_s, 2);
+      AddEntry(&state->simulator.graph, Literal("Right V"), right_v, curr_s, 2);
+      AddEntry(&state->simulator.graph, Literal("Left V"), left_v, curr_s, 2);
+
+      AddEntry(&state->simulator.graph, Literal("d2theta/ds2"), curr_sample.d2theta_ds2, curr_s, 4);
+      if(i > 0) {
+         AutoPathData last_sample = {};
+         MapLookup(&plan->map, curr_s - step, &last_sample);
+   
+         AddEntry(&state->simulator.graph, Literal("d/ds dtheta/ds"), (curr_sample.dtheta_ds - last_sample.dtheta_ds) / step, curr_s, 4);
+      }
+
+      AddEntry(&state->simulator.graph, Literal("dtheta/ds"), curr_sample.dtheta_ds, curr_s, 3);
+      AddEntry(&state->simulator.graph, Literal("S d2theta/ds2"), curr_dtheta_ds, curr_s, 3);
+      curr_dtheta_ds += curr_sample.d2theta_ds2 * step;
+   }
+   //---------------------------------------------
 
    // state->simulator.pivot = NULL;
-   // state->simulator.path = plan;
+   state->simulator.path = plan;
 
-   // PathPlanSample starting_sample = {};
-   // MapLookup(&plan->map, 0, &starting_sample);
+   AutoPathData starting_sample = {};
+   MapLookup(&plan->map, 0, &starting_sample);
 
-   // state->simulator.state.pos = starting_sample.pose.pos;
-   // state->simulator.state.angle = starting_sample.pose.angle;
+   state->simulator.state.pos = starting_sample.pose.pos;
+   state->simulator.state.angle = starting_sample.pose.angle;
 }
-//---------------------
+*/
 
 void DrawSelectedPath(EditorState *state, ui_field_topdown *field, bool field_clicked, element *page) {
    AutoPath *selected_path = state->selected_path;
@@ -761,10 +738,10 @@ void DrawSelectedPath(EditorState *state, ui_field_topdown *field, bool field_cl
       selected_path->is_reverse = !selected_path->is_reverse;
    }
 
-   if(Button(edit_buttons, "Sim", menu_button).clicked) {
-      ResetMultiLineGraph(&state->simulator.graph);
-      SimulatePath(state, selected_path);
-   }
+   // if(Button(edit_buttons, "Sim", menu_button).clicked) {
+   //    ResetMultiLineGraph(&state->simulator.graph);
+   //    SimulatePath(state, selected_path);
+   // }
 
    Label(edit_panel, Concat(Literal("Path length: "), ToString(selected_path->length)), 20, WHITE);
    Label(edit_panel, Concat(Literal("Time: "), ToString(GetTotalTime(GetDVTA(&selected_path->data.velocity)))), 20, WHITE);
@@ -813,7 +790,7 @@ void DrawSelectedPath(EditorState *state, ui_field_topdown *field, bool field_cl
 
    if(point_clicked) {
       selected_path->control_points = 
-         ArrayRemove(&state->project_arena, North_HermiteControlPoint, selected_path->control_points, 
+         ArrayRemove(state->project_arena, North_HermiteControlPoint, selected_path->control_points, 
                      point_index, selected_path->control_point_count--);
       RecalculateAutoPath(selected_path);
    }
@@ -869,7 +846,7 @@ void DrawSelectedPath(EditorState *state, ui_field_topdown *field, bool field_cl
 
          if(add_point) {
             selected_path->control_points = 
-               ArrayInsert(&state->project_arena, North_HermiteControlPoint, selected_path->control_points,
+               ArrayInsert(state->project_arena, North_HermiteControlPoint, selected_path->control_points,
                            insert_index, &new_point, selected_path->control_point_count);
             selected_path->control_point_count++;
             RecalculateAutoPath(selected_path);
@@ -893,6 +870,11 @@ void DrawEditingView(element *page, EditorState *state) {
    Panel(state->top_bar, Size(40, Size(state->top_bar).y));
    if(Button(state->top_bar, "Save", menu_button.IsEnabled(GetText(project_name_box).length > 0)).clicked) {
       WriteProject(state->project);
+   }
+
+   //TODO: enable this button if were connected to a robot
+   if(Button(state->top_bar, "Upload", menu_button.IsEnabled(false)).clicked) {
+      //TODO: send to the robot
    }
 
    static float field_width = 700;
@@ -927,7 +909,7 @@ void DrawEditingView(element *page, EditorState *state) {
    }
 
    if(Button(state->top_bar, "Exit", menu_button).clicked) {
-      Reset(&state->project_arena);
+      Reset(state->project_arena);
       state->project = NULL;
       state->view = EditorView_Blank;
    }

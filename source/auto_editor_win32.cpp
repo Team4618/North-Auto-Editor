@@ -25,7 +25,7 @@
 #include "auto_editor.cpp"
 
 int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-   Win32CommonInit(PlatformAllocArena(Megabyte(10)));
+   Win32CommonInit(PlatformAllocArena(Megabyte(10), "Temp"));
    ui_impl_win32_window window = createWindow("Auto Editor");
    
    HANDLE hIcon = LoadImageA(0, "icon.ico", IMAGE_ICON, 0, 0, LR_DEFAULTSIZE | LR_LOADFROMFILE);
@@ -40,9 +40,9 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int n
    initTheme();
 
    UIContext ui_context = {};
-   ui_context.frame_arena = PlatformAllocArena(Megabyte(2));
-   ui_context.persistent_arena = PlatformAllocArena(Megabyte(2));
-   ui_context.filedrop_arena = PlatformAllocArena(Megabyte(2));
+   ui_context.frame_arena = PlatformAllocArena(Megabyte(2), "Frame Arena");
+   ui_context.persistent_arena = PlatformAllocArena(Megabyte(2), "Persistent Arena");
+   ui_context.filedrop_arena = PlatformAllocArena(Megabyte(2), "Filedrop Arena");
    ui_context.font = &theme_font;
 
    EditorState state = {};
@@ -50,7 +50,7 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int n
 
    Timer timer = InitTimer();
    while(PumpMessages(&window, &ui_context)) {
-      Reset(&__temp_arena);
+      Reset(__temp_arena);
       
       state.directory_changed = CheckFiles(&state.file_watcher);
 

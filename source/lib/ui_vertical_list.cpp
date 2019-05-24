@@ -34,7 +34,7 @@ element *_VerticalList(ui_id id, element *parent, rect2 bounds) {
    element *content = _Panel(id + GEN_UI_ID, base, bounds, Captures(INTERACTION_VERTICAL_SCROLL));
    element *scroll  = _Panel(id + GEN_UI_ID, base, bounds);
 
-   vertical_list_layout_data *layout_data = PushStruct(&context->frame_arena, vertical_list_layout_data); 
+   vertical_list_layout_data *layout_data = PushStruct(context->frame_arena, vertical_list_layout_data); 
    layout_data->data = data;
    layout_data->at.y = -data->scroll_offset;
    

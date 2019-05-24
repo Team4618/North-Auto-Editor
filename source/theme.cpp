@@ -15,6 +15,13 @@ loaded_font theme_font;
 
 void initTheme() {
    logoTexture = loadTexture("logo.png", true);
-   theme_font = loadFont(ReadEntireFile("OpenSans-Regular.ttf", true), 
-                         PlatformAllocArena(Megabyte(5)));
+   
+   MemoryArena *font_arena = PlatformAllocArena(Megabyte(5), "Font Arena");
+   theme_font = loadFont(ReadEntireFile("OpenSans-Regular.ttf", true, font_arena), font_arena);
 }
+
+// element *_MyLabel(ui_id id, element *parent, string text, f32 line_height, 
+//                   v2 p = V2(0, 0), v2 m = V2(0, 0))
+// {
+//    return _Label(id, parent, text, line_height, BLACK, p, m);
+// }

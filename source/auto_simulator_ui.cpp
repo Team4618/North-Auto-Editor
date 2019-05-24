@@ -1,3 +1,22 @@
+//VAS INTERPOLATOR TEST---------------------------
+v2 VAS_data[128] = {};
+
+void DrawVASInterpolatorTest(element *page) {
+   //function on the space -> random datapoints -> interpolate to reconstruct function
+
+   element *base_panel = Panel(page, Size(200, 200).Captures(INTERACTION_HOT));
+   Background(base_panel, BLUE);
+
+   for(u32 i = 0; i < ArraySize(VAS_data); i++) {
+      //TODO: draw datapoints
+   }
+
+   if(IsHot(base_panel)) {
+      //TODO: draw kd tree traversal
+   }
+}
+//------------------------------------------------
+
 void DrawSimRobot(ui_field_topdown *field, SimRobot state, v4 colour) {
    v2 heading = DirectionNormal(ToDegrees(state.angle));
    v2 a = state.pos + heading * 0.5*state.size.x + Perp(heading) * 0.5*state.size.y;
@@ -40,7 +59,7 @@ void DrawSimField(element *page, EditorState *state) {
 
    if(Button(sim_ui, "Clear Plan", menu_button).clicked) {
       state->simulator.path = NULL;
-      state->simulator.pivot = NULL;
+      // state->simulator.pivot = NULL;
    }
 
    if(!state->simulator.run_sim) {
@@ -105,6 +124,21 @@ void DrawSimField(element *page, EditorState *state) {
       if(Button(path_panel, "Reset", menu_button).clicked) {
          state->simulator.t = 0;
          state->simulator.run_sim = false;
+
+         //TODO: CopyMapTo(&plan->original_map, &plan->map, AutoPathData);
+         //----------------------------
+         InterpolatingMapSamples samples = ResetMap(&plan->map);
+         for(u32 i = 0; i < samples.count; i++) {
+            f32 distance = plan->original_map.samples[i].len;
+            AutoPathData *data = (AutoPathData *) plan->original_map.samples[i].data_ptr;
+
+            samples.data[i].len = distance;
+            AutoPathData *sample1 = PushStruct(samples.arena, AutoPathData);
+            *sample1 = *data;
+            samples.data[i].data_ptr = sample1;
+         }
+         BuildMap(&plan->map);
+         //----------------------------
 
          AutoPathData starting_sample = {};
          MapLookup(&plan->map, 0, &starting_sample);
@@ -193,9 +227,9 @@ void DrawSimField(element *page, EditorState *state) {
 
          CubicHermiteSpline(&field, A.pos, A.tangent, B.pos, B.tangent, BLACK, 2);
       }
-   } else if(state->simulator.pivot != NULL) {
+   } /*else if(state->simulator.pivot != NULL) {
       
-   } else {
+   }*/ else {
       element *fk_panel = ColumnPanel(sim_ui, Width(Size(sim_ui).x));
       Background(fk_panel, dark_grey);
       Label(fk_panel, "Forward Kinematics", 40, WHITE);
@@ -244,4 +278,6 @@ void DrawSimulator(element *full_page, EditorState *state) {
    } else {
       Label(page, "No Field", V2(Size(page).x, 80), 50, BLACK);
    }
+
+   DrawVASInterpolatorTest(page);
 }

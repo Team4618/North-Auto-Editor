@@ -1,14 +1,14 @@
-#include "north/north_common_definitions.h"
-#include "north/north_file_definitions.h"
-#include "north/north_network_definitions.h"
+#include "north_defs/north_common_definitions.h"
+#include "north_defs/north_file_definitions.h"
+#include "north_defs/north_network_definitions.h"
 
 #include "theme.cpp"
 
 #define INCLUDE_DRAWPROFILES
-#include "robot_profile_utils.cpp"
-#include "auto_project_utils.cpp"
+#include "north_shared/robot_profile_utils.cpp"
+#include "north_shared/auto_project_utils.cpp"
 #define INCLUDE_DRAWSETTINGS
-#include "north_settings_utils.cpp"
+#include "north_shared/north_settings_utils.cpp"
 
 enum EditorPage {
    EditorPage_Home,
@@ -36,7 +36,7 @@ enum PathEditMode {
    RemoveControlPoint,
 };
 
-#include "differential_drive_sim.cpp"
+//#include "differential_drive_sim.cpp"
 
 struct EditorState {
    EditorPage page;
@@ -51,7 +51,7 @@ struct EditorState {
    bool path_got_selected;
    PathEditMode path_edit;
 
-   MemoryArena project_arena;
+   MemoryArena *project_arena;
    AutoProjectLink *project;
 
    TextBoxData project_name_box;
@@ -63,12 +63,12 @@ struct EditorState {
    NorthSettings settings;
    RobotProfiles profiles;
 
-   MemoryArena file_lists_arena;
+   MemoryArena *file_lists_arena;
    FileListLink *ncff_files;
    FileListLink *ncrp_files;
    FileListLink *ncap_files;
 
-   SimulatorState simulator;
+   //SimulatorState simulator;
 };
 
 //--------------------move-to-common---------------------------
@@ -148,30 +148,30 @@ f32 MinDistFrom(ui_field_topdown *field, North_HermiteControlPoint *control_poin
 //---------------------------------------------------------------
 
 #include "auto_editor_ui.cpp"
-#include "auto_simulator_ui.cpp"
+//#include "auto_simulator_ui.cpp"
 
 void initEditor(EditorState *state) {
    state->page = EditorPage_Home;
-   state->settings.arena = PlatformAllocArena(Megabyte(1));
-   state->profiles.current.arena = PlatformAllocArena(Megabyte(10));
-   state->profiles.loaded.arena = PlatformAllocArena(Megabyte(10));
-   state->project_arena = PlatformAllocArena(Megabyte(30));
-   state->file_lists_arena = PlatformAllocArena(Megabyte(10));
-   state->simulator.graph = NewMultiLineGraph(PlatformAllocArena(Megabyte(10)));
-   state->simulator.arena = PlatformAllocArena(Megabyte(10));
+   state->settings.arena = PlatformAllocArena(Megabyte(1), "Settings");
+   state->profiles.current.arena = PlatformAllocArena(Megabyte(10), "Current Profile");
+   state->profiles.loaded.arena = PlatformAllocArena(Megabyte(10), "Loaded Profile");
+   state->project_arena = PlatformAllocArena(Megabyte(30), "Auto Project");
+   state->file_lists_arena = PlatformAllocArena(Megabyte(10), "File List");
+   // state->simulator.graph = NewMultiLineGraph(PlatformAllocArena(Megabyte(10), "Sim Graph"));
+   // state->simulator.arena = PlatformAllocArena(Megabyte(10), "Sim");
 
    InitTextBoxData(&state->project_name_box, state->_project_name_box);
-   InitFileWatcher(&state->file_watcher, PlatformAllocArena(Kilobyte(512)), "*.*");
+   InitFileWatcher(&state->file_watcher, PlatformAllocArena(Kilobyte(512), "File Watcher"), "*.*");
 
-   state->simulator.state.size = V2(2, 2);
-   state->simulator.state.pos = V2(9, 9);
+   // state->simulator.state.size = V2(2, 2);
+   // state->simulator.state.pos = V2(9, 9);
 }
 
 void reloadFiles(EditorState *state) {
-   Reset(&state->file_lists_arena);
-   state->ncff_files = ListFilesWithExtension("*.ncff", &state->file_lists_arena);
-   state->ncrp_files = ListFilesWithExtension("*.ncrp", &state->file_lists_arena);
-   state->ncap_files = ListFilesWithExtension("*.ncap", &state->file_lists_arena);
+   Reset(state->file_lists_arena);
+   state->ncff_files = ListFilesWithExtension("*.ncff", state->file_lists_arena);
+   state->ncrp_files = ListFilesWithExtension("*.ncrp", state->file_lists_arena);
+   state->ncap_files = ListFilesWithExtension("*.ncap", state->file_lists_arena);
 
    ReadSettingsFile(&state->settings);
 }
@@ -200,8 +200,8 @@ void DrawOpenFileView(element *page, EditorState *state) {
          //TODO: draw previews, not just buttons
          //TODO: grey out buttons that are incompatible instead of just not working
          if(Button(page, file->name, menu_button).clicked) {
-            Reset(&state->project_arena);
-            AutoProjectLink *project = ReadAutoProject(file->name, &state->project_arena);
+            Reset(state->project_arena);
+            AutoProjectLink *project = ReadAutoProject(file->name, state->project_arena);
             if(IsProjectCompatible(project, &state->profiles.current)) {
                state->project = project;
                SetText(&state->project_name_box, state->project->name);
@@ -241,11 +241,11 @@ void DrawNewFileView(element *page, EditorState *state) {
             Center(field_starting_pos->bounds) + 10 * direction_arrow);           
 
       if(WasClicked(field_starting_pos)) {
-         Reset(&state->project_arena);
-         state->project = PushStruct(&state->project_arena, AutoProjectLink);
+         Reset(state->project_arena);
+         state->project = PushStruct(state->project_arena, AutoProjectLink);
          state->project->starting_angle = starting_pos->angle;
 
-         state->project->starting_node = PushStruct(&state->project_arena, AutoNode);
+         state->project->starting_node = PushStruct(state->project_arena, AutoNode);
          state->project->starting_node->pos = starting_pos->pos;
          
          state->view = EditorView_Editing;
@@ -397,14 +397,14 @@ void DrawUI(element *root, EditorState *state) {
    state->top_bar = RowPanel(root, Size(Size(root).x, page_tab_height));
    Background(state->top_bar, dark_grey);
    PageButton("Home", EditorPage_Home, state);
-   PageButton("Sim", EditorPage_Simulator, state);
+   //PageButton("Sim", EditorPage_Simulator, state);
    PageButton("Robots", EditorPage_Robots, state);
    PageButton("Settings", EditorPage_Settings, state);
 
    element *page = ColumnPanel(root, RectMinMax(root->bounds.min + V2(0, status_bar_height + page_tab_height), root->bounds.max));
    switch(state->page) {
       case EditorPage_Home: DrawHome(page, state); break;
-      case EditorPage_Simulator: DrawSimulator(page, state); break;
+      //case EditorPage_Simulator: DrawSimulator(page, state); break;
       case EditorPage_Robots: DrawProfiles(page, &state->profiles, state->ncrp_files); break;
       case EditorPage_Settings: {
          v2 robot_size_ft = V2(2, 2);

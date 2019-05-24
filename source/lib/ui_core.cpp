@@ -27,7 +27,7 @@ struct glyph_texture {
 };
 
 struct loaded_font {
-   MemoryArena arena;
+   MemoryArena *arena; //NOTE: the loaded_font ownes this arena, noone else should reset it
    glyph_texture *glyphs[128];
    stbtt_fontinfo fontinfo;
 
@@ -140,12 +140,13 @@ enum UIDebugMode {
    UIDebugMode_Disabled,
    UIDebugMode_ElementPick,
    UIDebugMode_ElementSelected,
-   UIDebugMode_Memory
+   UIDebugMode_Memory,
+   UIDebugMode_Performance,
 };
 
 struct element;
 struct UIContext {
-   MemoryArena frame_arena;
+   MemoryArena *frame_arena; //NOTE: owned by UIContext
    loaded_font *font;
 
    element *overlay;
@@ -155,7 +156,7 @@ struct UIContext {
    ui_id debug_selected;
    element *debug_selected_e;
 
-   MemoryArena persistent_arena;
+   MemoryArena *persistent_arena; //NOTE: owned by UIContext
    persistent_hash_link *persistent_hash[128];
   
    ui_id hot_e;
@@ -189,7 +190,7 @@ struct UIContext {
 
    ui_id filedrop_e;
    ui_id new_filedrop_e;
-   MemoryArena filedrop_arena;
+   MemoryArena *filedrop_arena; //NOTE: owned by UIContext
    u32 filedrop_count;
    string *filedrop_names;
 
@@ -317,15 +318,15 @@ element *beginFrame(v2 window_size, UIContext *context, f32 dt) {
    context->debug_hot_e = NULL;
    context->debug_selected_e = NULL;
 
-   Reset(&context->frame_arena);
-   context->overlay = PushStruct(&context->frame_arena, element);
+   Reset(context->frame_arena);
+   context->overlay = PushStruct(context->frame_arena, element);
    context->overlay->context = context;
    context->overlay->bounds = RectMinSize(V2(0, 0), window_size);
    context->overlay->cliprect = RectMinSize(V2(0, 0), window_size);
    context->overlay->id.loc = "overlay";
    context->overlay->layout_flags = Layout_Width | Layout_Height | Layout_Placed;
 
-   element *root = PushStruct(&context->frame_arena, element);
+   element *root = PushStruct(context->frame_arena, element);
    root->context = context;
    root->bounds = RectMinSize(V2(0, 0), window_size);
    root->cliprect = RectMinSize(V2(0, 0), window_size);
@@ -353,7 +354,7 @@ void addCommand(element *e, RenderCommand *command) {
 
 RenderCommand *Rectangle(element *e, rect2 bounds, v4 colour) {
    UIContext *context = e->context;
-   RenderCommand *result = PushStruct(&context->frame_arena, RenderCommand);
+   RenderCommand *result = PushStruct(context->frame_arena, RenderCommand);
    result->type = RenderCommand_Rectangle;
    result->next = NULL;
    result->drawRectangle.bounds = bounds;
@@ -371,7 +372,7 @@ RenderCommand *Background(element *e, v4 colour) {
 
 RenderCommand *_Line(element *e, v4 colour, f32 thickness, v2 *points, u32 point_count, bool closed = false) {
    UIContext *context = e->context;
-   MemoryArena *arena = &context->frame_arena;
+   MemoryArena *arena = context->frame_arena;
 
    RenderCommand *result = PushStruct(arena, RenderCommand);
    result->type = RenderCommand_Line;
@@ -435,7 +436,7 @@ f32 Angle(v2 v) {
 
 RenderCommand *Texture(element *e, texture tex, rect2 bounds, v4 colour = WHITE) {
    UIContext *context = e->context;
-   RenderCommand *result = PushStruct(&context->frame_arena, RenderCommand);
+   RenderCommand *result = PushStruct(context->frame_arena, RenderCommand);
    result->type = RenderCommand_Texture;
    result->next = NULL;
    result->drawTexture.bounds = bounds;
@@ -805,7 +806,7 @@ panel_args Captures(u32 _captures) {
 
 element *addElement(ui_id id, element *parent, u32 captures) {
    UIContext *context = parent->context;
-   element *e = PushStruct(&context->frame_arena, element);
+   element *e = PushStruct(context->frame_arena, element);
    
    e->context = context;
    e->parent = parent;
@@ -845,7 +846,9 @@ element *_Panel(ui_id id, element *parent, rect2 bounds, panel_args args = {}) {
 // }
 
 element *_Panel(ui_id id, element *parent, panel_args args) {
+   //If this fails, parent doesnt have a layout set
    Assert(parent->layout_elem != NULL);
+   //If this fails, one of the children of "parent" is using defered layout and hasn't finished yet
    Assert(!parent->layout_locked);
 
    if((args.layout_flags & Layout_Width) &&
@@ -971,7 +974,7 @@ void ColumnLayout(element *e) {
    UIContext *context = e->context;
    e->layout_elem = column_layout_elem;
    e->calculate_size = column_calculate_size;
-   e->layout_data = (u8 *) PushStruct(&context->frame_arena, v2);
+   e->layout_data = (u8 *) PushStruct(context->frame_arena, v2);
 }
 
 #define ColumnPanel(...) _ColumnPanel(GEN_UI_ID, __VA_ARGS__)
@@ -1014,7 +1017,7 @@ void RowLayout(element *e) {
    UIContext *context = e->context;
    e->layout_elem = row_layout_elem;
    e->calculate_size = row_calculate_size;
-   e->layout_data = (u8 *) PushStruct(&context->frame_arena, v2);
+   e->layout_data = (u8 *) PushStruct(context->frame_arena, v2);
 }
 
 #define RowPanel(...) _RowPanel(GEN_UI_ID, __VA_ARGS__)
@@ -1094,10 +1097,10 @@ u8 *_GetOrAllocate(ui_id in_id, UIContext *context, u32 size) {
    }
    
    if(result == NULL) {
-      result = PushSize(&context->persistent_arena, size);
+      result = PushSize(context->persistent_arena, size);
       OutputDebugStringA("[ui_core] Allocating new persistant data\n");
 
-      persistent_hash_link *new_link = PushStruct(&context->persistent_arena, persistent_hash_link);
+      persistent_hash_link *new_link = PushStruct(context->persistent_arena, persistent_hash_link);
       new_link->id = id;
       new_link->data = result;
       new_link->next = context->persistent_hash[hash];

@@ -154,7 +154,7 @@ ui_numberbox _TextBox(ui_id id, element *parent, string value, f32 line_height,
    
    Outline(textbox.e, outline_colour, IsSelected(textbox.e) ? 4 : 2);
 
-   if(IsSelected(textbox.e) && input->key_enter && input->ctrl_down) {
+   if(textbox.enter && input->ctrl_down) {
       CopyStringToTextbox(value, &data->text);
    }
 
@@ -166,7 +166,7 @@ ui_numberbox _TextBox(ui_id id, element *parent, string value, f32 line_height,
 
    ui_numberbox result = {};
    result.textbox = textbox;
-   result.valid_enter = textbox.enter && valid;
+   result.valid_enter = textbox.enter && valid && !input->ctrl_down;
    result.enter = textbox.enter;
    result.valid = valid;
    return result;

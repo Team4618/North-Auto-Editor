@@ -1,3 +1,5 @@
+//TODO: clean up this file, seperate into sections (eg. base types, string stuff, memory, math...)
+
 #include "stdint.h"
 typedef int8_t s8;
 typedef uint8_t u8;
@@ -182,17 +184,24 @@ struct MemoryArena {
    MemoryArenaBlock *curr_block;
 };
 
-u8 *PushSize(MemoryArena *arena, u64 size) {
+u8 *PushSize(MemoryArena *arena, u64 size, bool assert_on_empty = true) {
    Assert(arena->valid);
 
    MemoryArenaBlock *curr_block = arena->curr_block;
-   if(curr_block->size <= (size + curr_block->used)) {
+   if(curr_block->size < (size + curr_block->used)) {
       if(curr_block->next == NULL) {
-         //TODO: what size should we allocate?
-         MemoryArenaBlock *new_block = arena->alloc_block(Max(arena->initial_size, size));
-         
-         curr_block->next = new_block;
-         arena->curr_block = new_block;
+         if(arena->alloc_block == NULL) {
+            if(assert_on_empty)
+               Assert(false);
+
+            return NULL;
+         } else {
+            //TODO: what size should we allocate?
+            MemoryArenaBlock *new_block = arena->alloc_block(Max(arena->initial_size, size));
+            
+            curr_block->next = new_block;
+            arena->curr_block = new_block;
+         }
       } else {
          arena->curr_block = curr_block->next; 
       }
@@ -205,6 +214,20 @@ u8 *PushSize(MemoryArena *arena, u64 size) {
    _Zero(result, size);
 
    return result;
+}
+
+bool CanAllocate(MemoryArena *arena, u64 size) {
+   if(arena->alloc_block != NULL)
+      return true;
+
+   for(MemoryArenaBlock *block = arena->curr_block; 
+       block; block = block->next)
+   {
+      if(block->size >= (size + block->used))
+         return true;
+   }
+
+   return false;
 }
 
 MemoryArena BeginTemp(MemoryArena *arena) {
@@ -239,6 +262,20 @@ void EndTemp(MemoryArena *temp) {
 #define PushArray(arena, struct, length) (struct *) PushSize(arena, (length) * sizeof(struct))
 #define PushArrayCopy(arena, struct, first_elem, length) (struct *) PushCopy(arena, first_elem, length * sizeof(struct))
 
+MemoryArena *PushArena(MemoryArena *arena, u64 size) {
+   MemoryArenaBlock *block = PushStruct(arena, MemoryArenaBlock);
+   block->size = size;
+   block->memory = PushSize(arena, size);
+   
+   MemoryArena *result = PushStruct(arena, MemoryArena);
+   result->initial_size = size;
+   result->first_block = block;
+   result->curr_block = block;
+   result->valid = true;
+   
+   return result;
+}
+
 string PushCopy(MemoryArena *arena, string s) {
    string result = {};
    result.length = s.length;
@@ -269,10 +306,11 @@ struct buffer {
    u8 *data;
 };
 
-buffer Buffer(u64 size, u8 *data) {
+buffer Buffer(u64 size, u8 *data, u64 offset = 0) {
    buffer result = {};
    result.size = size;
    result.data = data;
+   result.offset = offset;
    return result;
 }
 
@@ -319,12 +357,19 @@ void WriteString(buffer *b, string str) {
 
 #define WriteStructData(b, type, name, code) do { type name = {}; code WriteStruct(b, &name); } while(false)
 
-MemoryArena __temp_arena;
+void Advance(buffer *b, u32 by) {
+   Assert(by <= b->offset);
+   //NOTE: this Copy is kinda sketchy because src & dst are in the same buffer
+   Copy(b->data + by, b->offset - by, b->data);
+   b->offset -= by;
+}
+
+MemoryArena *__temp_arena = NULL;
 
 struct TempArena {
    MemoryArena arena;
 
-   TempArena(MemoryArena *_arena = &__temp_arena) {
+   TempArena(MemoryArena *_arena = __temp_arena) {
       arena = BeginTemp(_arena);
    } 
 
@@ -333,14 +378,14 @@ struct TempArena {
    }
 };
 
-#define PushTempSize(size) PushSize(&__temp_arena, (size))
-#define PushTempStruct(struct) (struct *) PushSize(&__temp_arena, sizeof(struct))
-#define PushTempArray(struct, length) (struct *) PushSize(&__temp_arena, (length) * sizeof(struct))
-#define PushTempCopy(string) PushCopy(&__temp_arena, (string))
-#define PushTempBuffer(size) PushBuffer(&__temp_arena, (size))
+#define PushTempSize(size) PushSize(__temp_arena, (size))
+#define PushTempStruct(struct) (struct *) PushSize(__temp_arena, sizeof(struct))
+#define PushTempArray(struct, length) (struct *) PushSize(__temp_arena, (length) * sizeof(struct))
+#define PushTempCopy(string) PushCopy(__temp_arena, (string))
+#define PushTempBuffer(size) PushBuffer(__temp_arena, (size))
 
 MemoryArenaBlock *PushTempBlock(u64 size) {
-   MemoryArenaBlock *result = (MemoryArenaBlock *) PushSize(&__temp_arena, sizeof(MemoryArenaBlock) + size);
+   MemoryArenaBlock *result = (MemoryArenaBlock *) PushSize(__temp_arena, sizeof(MemoryArenaBlock) + size);
    result->size = size;
    result->used = 0;
    result->next = NULL;
@@ -348,36 +393,44 @@ MemoryArenaBlock *PushTempBlock(u64 size) {
    return result;
 }
 
-MemoryArena PushTempArena(u32 size) {
-   MemoryArena result = {};
-   result.first_block = PushTempBlock(size);
-   result.curr_block = result.first_block;
-   result.initial_size = size;
-   result.valid = true;
-   result.alloc_block = PushTempBlock;
+MemoryArena *PushTempArena(u32 size) {
+   MemoryArena *result = PushTempStruct(MemoryArena);
+   result->first_block = PushTempBlock(size);
+   result->curr_block = result->first_block;
+   result->initial_size = size;
+   result->valid = true;
+   result->alloc_block = PushTempBlock;
    return result;
 }
 
-//--------------REWRITE THIS ASAP-----------------
 //------------------------------------------------
-string Concat(string a, string b, string c = EMPTY_STRING, string d = EMPTY_STRING,
-              string e = EMPTY_STRING, string f = EMPTY_STRING) {
-   string inputs[] = {a, b, c, d, e, f};
+//TODO: make concatenation & conversion from c-strings to len-strings nicer
+string Concat(string *inputs, u32 input_count) {
    string result = {};
    
-   for(u32 i = 0; i < ArraySize(inputs); i++) {
+   for(u32 i = 0; i < input_count; i++) {
       result.length += inputs[i].length;
    }
 
    result.text = PushTempArray(char, result.length);
    u8 *dest = (u8 *) result.text;
-   for(u32 i = 0; i < ArraySize(inputs); i++) {
+   for(u32 i = 0; i < input_count; i++) {
       string s = inputs[i];
       Copy((u8 *) s.text, s.length, dest);
       dest += s.length;
    }
 
    return result;
+}
+
+string Concat(string a, string b, string c = EMPTY_STRING, string d = EMPTY_STRING,
+              string e = EMPTY_STRING, string f = EMPTY_STRING) {
+   string inputs[] = {a, b, c, d, e, f};
+   return Concat(inputs, ArraySize(inputs));
+}
+
+string operator+ (string a, string b) {
+	return Concat(a, b);
 }
 
 #include "stdio.h"
@@ -420,10 +473,16 @@ u32 ToU32(string number) {
    return (u32) strtol(number_buffer, NULL, 10);
 }
 
+string ToString(s32 value) {
+   char buffer[128] = {};
+   sprintf(buffer, "%i", value);
+   return PushTempCopy(Literal(buffer));
+}
+
 char *ToCString(string str) {
    char null_terminated[256] = {};
    sprintf(null_terminated, "%.*s", Min(str.length, 255), str.text);
-   return (char *) PushCopy(&__temp_arena, null_terminated, ArraySize(null_terminated));
+   return (char *) PushCopy(__temp_arena, null_terminated, ArraySize(null_terminated));
 }
 
 #include "stdlib.h"
@@ -785,32 +844,117 @@ union mat4 {
    f32 e[16];
 };
 
-mat4 Identity()
-{
-   mat4 result = {};
-   result.e[0] = 1;
-   result.e[5] = 1;
-   result.e[10] = 1;
-   result.e[15] = 1;
-   return result;
+f32 &M(mat4 &m, u32 i, u32 j) {
+   return m.e[i + 4*j];
 }
 
-mat4 Orthographic(f32 top, f32 bottom, f32 left, f32 right, f32 nearPlane, f32 far)
-{
-   mat4 result = {};
+mat4 operator* (mat4 A, mat4 B) {
+	mat4 output = {};
+
+   for(u32 i = 0; i < 4; i++) {
+      for(u32 j = 0; j < 4; j++) {
+         M(output, i, j) = M(A, i, 0) * M(B, 0, j) + 
+                           M(A, i, 1) * M(B, 1, j) +
+                           M(A, i, 2) * M(B, 2, j) +
+                           M(A, i, 3) * M(B, 3, j);  
+      }
+   }
+
+	return output;
+}
+
+mat4 Identity() {
+   mat4 A = {};
+   M(A, 0, 0) = 1;
+   M(A, 1, 1) = 1;
+   M(A, 2, 2) = 1;
+   M(A, 3, 3) = 1;
+   return A;
+}
+
+mat4 Orthographic(f32 top, f32 bottom, f32 left, f32 right, f32 nearPlane, f32 far) {
+   mat4 A = {};
    
-   result.e[0] = 2 / (right - left);
-   result.e[5] = 2 / (top - bottom);
-   result.e[10] = -2 / (far - nearPlane);
-   result.e[12] = -(right + left) / (right - left);
-   result.e[13] = -(top + bottom) / (top - bottom);
-   result.e[14] = -(far + nearPlane) / (far - nearPlane);
-   result.e[15] = 1;
+   M(A, 0, 0) = 2 / (right - left);
+   M(A, 1, 1) = 2 / (top - bottom);
+   M(A, 2, 2) = -2 / (far - nearPlane);
+
+   M(A, 0, 3) = -(right + left) / (right - left);
+   M(A, 1, 3) = -(top + bottom) / (top - bottom);
+   M(A, 2, 3) = -(far + nearPlane) / (far - nearPlane);
+   M(A, 3, 3) = 1;
    
-   return result;
+   return A;
+}
+
+mat4 Perspective(f32 fovY, f32 aspect, f32 n, f32 f) {
+   mat4 A = {};
+
+   f32 tangent = tanf(fovY / 2);
+   f32 height = n * tangent;
+   f32 width = height * aspect; 
+
+   f32 t = height;
+   f32 b = -height;
+   f32 r = width;
+   f32 l = -width;
+   
+   M(A, 0, 0) = 2*n/(r - l);
+   M(A, 1, 1) = 2*n/(t - b);
+
+   M(A, 0, 2) = (r + l)/(r - l);
+   M(A, 1, 2) = (t + b)/(t - b);
+   M(A, 2, 2) = -(f + n)/(f - n);
+   M(A, 3, 2) = -1;
+
+   M(A, 2, 3) = -2*f*n/(f - n);
+   
+   return A;
+}
+
+mat4 Translation(v3 t) {
+   mat4 A = Identity();
+   M(A, 0, 3) = t.x;
+   M(A, 1, 3) = t.y;
+   M(A, 2, 3) = t.z;
+   return A;
+}
+
+mat4 Scale(v3 s) {
+   mat4 A = {};
+   M(A, 0, 0) = s.x;
+   M(A, 1, 1) = s.y;
+   M(A, 2, 2) = s.z;
+   M(A, 3, 3) = 1;
+   return A;
+}
+
+mat4 Rotation(v3 u, f32 t) {
+   mat4 A = {};
+
+   f32 c = cosf(t);
+   f32 s = sinf(t);
+
+   M(A, 0, 0) = u.x*u.x*(1-c) + c;
+   M(A, 1, 0) = u.x*u.y*(1-c) + u.z*s;
+   M(A, 2, 0) = u.x*u.z*(1-c) - u.y*s;
+
+   M(A, 0, 1) = u.x*u.y*(1-c) - u.z*s;
+   M(A, 1, 1) = u.y*u.y*(1-c) + c;
+   M(A, 2, 1) = u.y*u.z*(1-c) + u.x*s;
+
+   M(A, 0, 2) = u.x*u.z*(1-c) + u.y*s;
+   M(A, 1, 2) = u.y*u.z*(1-c) - u.x*s;
+   M(A, 2, 2) = u.z*u.z*(1-c) + c;
+
+   M(A, 3, 3) = 1;
+
+   return A;
 }
 
 //----------------------------------------------
+//TODO: do we want to keep this here?
+#if 1
 struct InterpolatingMap_Leaf {
    f32 len;
    
@@ -843,7 +987,7 @@ struct InterpolatingMap_Branch {
 typedef void (*interpolation_map_callback)(InterpolatingMap_Leaf *a, InterpolatingMap_Leaf *b, f32 t, void *result);
 
 struct InterpolatingMap {
-   MemoryArena arena;
+   MemoryArena *arena;
    u32 sample_exp;
    interpolation_map_callback lerp_callback;
 
@@ -859,7 +1003,7 @@ struct InterpolatingMapSamples {
 };
 
 InterpolatingMapSamples ResetMap(InterpolatingMap *map) {
-   MemoryArena *arena = &map->arena;
+   MemoryArena *arena = map->arena;
    Reset(arena);
 
    u32 sample_count = Power(2, map->sample_exp); 
@@ -871,7 +1015,7 @@ InterpolatingMapSamples ResetMap(InterpolatingMap *map) {
 }
 
 void BuildMap(InterpolatingMap *map) {
-   MemoryArena *arena = &map->arena;
+   MemoryArena *arena = map->arena;
 
    u32 last_layer_count = Power(2, map->sample_exp - 1);
    InterpolatingMap_Branch *last_layer = PushArray(arena, InterpolatingMap_Branch, last_layer_count);
@@ -942,15 +1086,20 @@ void MapLookup(InterpolatingMap *map, f32 distance, void *result) {
 void interpolation_map_v2_lerp(InterpolatingMap_Leaf *a, InterpolatingMap_Leaf *b, f32 t, void *result) {
    *((v2 *)result) = lerp(a->data_v2, t, b->data_v2);
 }
- 
+#endif
 //----------------------------------------------
 
 string exe_directory = {};
 
-u64 total_size_requested = 0;
-u64 total_size_allocated = 0;
-u32 arenas_allocated = 0;
-u32 arena_blocks_allocated = 0;
+struct NamedMemoryArena {
+   //NOTE: NamedMemoryArena, the name string & the arena are all allocated together
+   NamedMemoryArena *next;
+
+   string name;
+   MemoryArena arena;
+};
+
+NamedMemoryArena *mdbg_first_arena = NULL;
 
 //------------------PLATFORM-SPECIFIC-STUFF---------------------
 #ifdef COMMON_PLATFORM
@@ -965,13 +1114,7 @@ u32 arena_blocks_allocated = 0;
       // #define READ_BARRIER MemoryBarrier()
       // #define WRITE_BARRIER MemoryBarrier()
 
-      //TODO: take a look at the weird memory usage
       MemoryArenaBlock *PlatformAllocArenaBlock(u64 size) {
-         OutputDebugStringA("Allocating Arena Block\n");
-         total_size_requested += size;
-         total_size_allocated += (sizeof(MemoryArenaBlock) + size);
-         arena_blocks_allocated++;
-
          MemoryArenaBlock *result = (MemoryArenaBlock *) VirtualAlloc(0, sizeof(MemoryArenaBlock) + size, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
          result->size = size;
          result->used = 0;
@@ -980,20 +1123,47 @@ u32 arena_blocks_allocated = 0;
          return result;
       }
 
-      MemoryArena PlatformAllocArena(u64 initial_size) {
-         OutputDebugStringA("Allocating Arena\n");
-         arenas_allocated++;
+      MemoryArena *PlatformAllocArena(u64 initial_size, string name) {
+         //NOTE: big joint allocation here
+         //TODO: make joint allocations easier??
+         u8 *memory = (u8 *) VirtualAlloc(0, 
+            sizeof(NamedMemoryArena) + name.length + sizeof(MemoryArenaBlock) + initial_size, 
+            MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
          
-         MemoryArena result = {};
-         result.first_block = PlatformAllocArenaBlock(initial_size);
-         result.curr_block = result.first_block;
-         result.initial_size = initial_size;
-         result.valid = true;
-         result.alloc_block = PlatformAllocArenaBlock;
-         return result;
+         NamedMemoryArena *named_arena = (NamedMemoryArena *) memory;
+         u8 *string_text = (u8 *) (memory + sizeof(NamedMemoryArena));
+         MemoryArenaBlock *first_block = (MemoryArenaBlock *) (memory + sizeof(NamedMemoryArena) + name.length);
+         u8 *block_memory = (u8 *) (memory + sizeof(NamedMemoryArena) + name.length + sizeof(MemoryArenaBlock));
+
+         //NOTE: initializing everything
+         first_block->size = initial_size;
+         first_block->used = 0;
+         first_block->next = NULL;
+         first_block->memory = block_memory;
+         
+         named_arena->name = String((char *) string_text, name.length);
+         Copy(name.text, name.length, named_arena->name.text); 
+
+         ZeroStruct(&named_arena->arena);
+         named_arena->arena.first_block = first_block;
+         named_arena->arena.curr_block = first_block;
+         named_arena->arena.initial_size = initial_size;
+         named_arena->arena.valid = true;
+         named_arena->arena.alloc_block = PlatformAllocArenaBlock;
+
+         named_arena->next = mdbg_first_arena;
+         mdbg_first_arena = named_arena;
+
+         return &named_arena->arena;
       }
 
-      buffer ReadEntireFile(const char* path, bool in_exe_directory = false) {
+      MemoryArena *PlatformAllocArena(u64 initial_size, char *name) {
+         return PlatformAllocArena(initial_size, Literal(name));
+      }
+
+      //TODO: ReadFileRange()
+
+      buffer ReadEntireFile(const char* path, bool in_exe_directory = false, MemoryArena *arena = __temp_arena) {
          char full_path[MAX_PATH + 1];
          sprintf(full_path, "%.*s%s", exe_directory.length, exe_directory.text, path);
 
@@ -1004,7 +1174,7 @@ u32 arena_blocks_allocated = 0;
          if(file_handle != INVALID_HANDLE_VALUE) {
             DWORD number_of_bytes_read;
             result.size = GetFileSize(file_handle, NULL);
-            result.data = (u8 *) VirtualAlloc(0, result.size, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
+            result.data = (u8 *) PushSize(arena, result.size);
             ReadFile(file_handle, result.data, result.size, &number_of_bytes_read, NULL);
             CloseHandle(file_handle);
          } else {
@@ -1017,12 +1187,6 @@ u32 arena_blocks_allocated = 0;
 
       buffer ReadEntireFile(string path, bool in_exe_directory = false) {
          return ReadEntireFile(ToCString(path), in_exe_directory);
-      }
-
-      void FreeEntireFile(buffer *file) {
-         VirtualFree(file->data, 0, MEM_RELEASE);
-         file->data = 0;
-         file->size = 0;
       }
 
       void WriteEntireFile(const char* path, buffer file) {
@@ -1040,13 +1204,54 @@ u32 arena_blocks_allocated = 0;
          return WriteEntireFile(ToCString(path), file);
       }
 
+      //TODO!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+      //NOTE: this creates a file only if the file didnt already exist
+      //      won't totally overwrite existing files like WriteEntireFile
+      // void WriteFileRange(const char* path, buffer file, u64 offset) {
+      //    HANDLE file_handle = CreateFileA(path, GENERIC_WRITE, 0, NULL, OPEN_ALWAYS,
+      //                                     FILE_ATTRIBUTE_NORMAL, NULL);
+                                          
+      //    if(file_handle != INVALID_HANDLE_VALUE) {
+      //       //TODO: write at offset
+      //       // DWORD number_of_bytes_written;
+      //       // WriteFile(file_handle, file.data, file.offset, &number_of_bytes_written, NULL);
+      //       CloseHandle(file_handle);
+      //    }
+      // }
+
+      void WriteFileAppend(const char* path, buffer file) {
+         HANDLE file_handle = CreateFileA(path, GENERIC_WRITE | FILE_APPEND_DATA, 
+                                          0, NULL, OPEN_ALWAYS,
+                                          FILE_ATTRIBUTE_NORMAL, NULL);
+                                          
+         if(file_handle != INVALID_HANDLE_VALUE) {
+            SetFilePointer(file_handle, 0, NULL, FILE_END);
+            DWORD number_of_bytes_written;
+            WriteFile(file_handle, file.data, file.offset, &number_of_bytes_written, NULL);
+            CloseHandle(file_handle);
+         }
+      }
+
+      void WriteFileAppend(string path, buffer file) {
+         return WriteFileAppend(ToCString(path), file);
+      }
+
+      void CreateFolder(const char* path) {
+         CreateDirectoryA(path, NULL);
+      }
+
+      void CreateFolder(string path) {
+         CreateFolder(ToCString(path));
+      }
+
       struct FileListLink {
          FileListLink *next;
          string name;
          string full_name;
       };
 
-      FileListLink *ListFilesWithExtension(char *wildcard_extension, MemoryArena *arena = &__temp_arena) {
+      FileListLink *ListFilesWithExtension(char *wildcard_extension, MemoryArena *arena = __temp_arena) {
          WIN32_FIND_DATAA file = {};
          HANDLE handle = FindFirstFileA(wildcard_extension, &file);
          FileListLink *result = NULL;
@@ -1111,25 +1316,26 @@ u32 arena_blocks_allocated = 0;
       };
       
       struct FileWatcher {
-         MemoryArena arena; //NOTE: this needs its own memory because it has to persist
+         //NOTE: this needs its own memory because it has to persist
+         MemoryArena *arena; //NOTE: FileWatcher ownes this
          string wildcard_extension;
 
          FileWatcherLink *first_in_list;
          FileWatcherLink *hash[64];
       };
 
-      void InitFileWatcher(FileWatcher *watcher, MemoryArena arena, string wildcard_extension) {
+      void InitFileWatcher(FileWatcher *watcher, MemoryArena *arena, string wildcard_extension) {
          watcher->arena = arena;
-         watcher->wildcard_extension = PushCopy(&watcher->arena, wildcard_extension);
+         watcher->wildcard_extension = PushCopy(watcher->arena, wildcard_extension);
       }
       
-      void InitFileWatcher(FileWatcher *watcher, MemoryArena arena, char *wildcard_extension) {
+      void InitFileWatcher(FileWatcher *watcher, MemoryArena *arena, char *wildcard_extension) {
          InitFileWatcher(watcher, arena, Literal(wildcard_extension));
       }
 
       //NOTE: updates file watcher, returns true if file timestamps have changed
       bool CheckFiles(FileWatcher *watcher) {
-         MemoryArena *arena = &watcher->arena;
+         MemoryArena *arena = watcher->arena;
 
          for(FileWatcherLink *curr = watcher->first_in_list;
              curr; curr = curr->next_in_list)
@@ -1185,7 +1391,7 @@ u32 arena_blocks_allocated = 0;
       
       //NOTE: this is pretty jank-tastic but itll get cleaned up in future
       char exepath[MAX_PATH + 1];
-      void Win32CommonInit(MemoryArena temp_arena) {
+      void Win32CommonInit(MemoryArena *temp_arena) {
          __temp_arena = temp_arena;
 
          if(0 == GetModuleFileNameA(0, exepath, MAX_PATH + 1))
@@ -1198,25 +1404,27 @@ u32 arena_blocks_allocated = 0;
 
             exe_directory.length--;
          }
+
+         //TODO: setup a console for logging when we're not running in visual studios
       }
 
       struct Timer {
          LARGE_INTEGER frequency;
-         LARGE_INTEGER timer;
+         LARGE_INTEGER last_time;
       };
 
       Timer InitTimer() {
          Timer result = {};
-         QueryPerformanceFrequency(&result.frequency); 
-         QueryPerformanceCounter(&result.timer);
+         QueryPerformanceFrequency(&result.frequency);
+         QueryPerformanceCounter(&result.last_time);
          return result;
       }
 
       f32 GetDT(Timer *timer) {
          LARGE_INTEGER new_time;
          QueryPerformanceCounter(&new_time);
-         f32 dt = (f32)(new_time.QuadPart - timer->timer.QuadPart) / (f32)timer->frequency.QuadPart;
-         timer->timer = new_time;
+         f32 dt = (f32)(new_time.QuadPart - timer->last_time.QuadPart) / (f32)timer->frequency.QuadPart;
+         timer->last_time = new_time;
          
          return dt;
       }
