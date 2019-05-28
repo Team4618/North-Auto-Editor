@@ -42,10 +42,36 @@ void Copy(void *src_in, u32 size, void *dest_in) {
    }
 }
 
+u32 StringLength(char *text) {
+   u32 length = 0;
+   while(*text) {
+      length++;
+      text++;
+   }
+
+   return length;
+}
+
 //TODO: utf-8
 struct string {
    char *text;
    u32 length;
+
+   string () {
+      this->text = 0;
+      this->length = NULL;
+   }
+
+   string (char *c_str) {
+      this->text = c_str;
+      this->length = StringLength(c_str);
+   }
+
+   string& operator= (char *c_str) {
+      this->text = c_str;
+      this->length = StringLength(c_str);
+      return *this;
+   }
 };
 
 const string EMPTY_STRING = {};
@@ -57,17 +83,9 @@ string String(char *text, u32 length) {
    return result;
 }
 
-u32 StringLength(char *text) {
-   u32 length = 0;
-   while(*text) {
-      length++;
-      text++;
-   }
+// #define ArrayLiteral(array) String((array), ArraySize(array))
 
-   return length;
-}
-
-#define ArrayLiteral(array) String((array), ArraySize(array))
+//TODO: get rid of this (or just rename it to String & get rid of most of its uses)
 string Literal(char *text) {
    string result = {};
 

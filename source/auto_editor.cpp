@@ -1,7 +1,3 @@
-#include "north_defs/north_common_definitions.h"
-#include "north_defs/north_file_definitions.h"
-#include "north_defs/north_network_definitions.h"
-
 #include "theme.cpp"
 
 #define INCLUDE_DRAWPROFILES
@@ -12,7 +8,6 @@
 
 enum EditorPage {
    EditorPage_Home,
-   EditorPage_Simulator,
    EditorPage_Robots,
    EditorPage_Settings
 };
@@ -35,8 +30,6 @@ enum PathEditMode {
    AddControlPoint,
    RemoveControlPoint,
 };
-
-//#include "differential_drive_sim.cpp"
 
 struct EditorState {
    EditorPage page;
@@ -67,8 +60,6 @@ struct EditorState {
    FileListLink *ncff_files;
    FileListLink *ncrp_files;
    FileListLink *ncap_files;
-
-   //SimulatorState simulator;
 };
 
 //--------------------move-to-common---------------------------
@@ -148,7 +139,6 @@ f32 MinDistFrom(ui_field_topdown *field, North_HermiteControlPoint *control_poin
 //---------------------------------------------------------------
 
 #include "auto_editor_ui.cpp"
-//#include "auto_simulator_ui.cpp"
 
 void initEditor(EditorState *state) {
    state->page = EditorPage_Home;
@@ -157,14 +147,9 @@ void initEditor(EditorState *state) {
    state->profiles.loaded.arena = PlatformAllocArena(Megabyte(10), "Loaded Profile");
    state->project_arena = PlatformAllocArena(Megabyte(30), "Auto Project");
    state->file_lists_arena = PlatformAllocArena(Megabyte(10), "File List");
-   // state->simulator.graph = NewMultiLineGraph(PlatformAllocArena(Megabyte(10), "Sim Graph"));
-   // state->simulator.arena = PlatformAllocArena(Megabyte(10), "Sim");
-
+   
    InitTextBoxData(&state->project_name_box, state->_project_name_box);
    InitFileWatcher(&state->file_watcher, PlatformAllocArena(Kilobyte(512), "File Watcher"), "*.*");
-
-   // state->simulator.state.size = V2(2, 2);
-   // state->simulator.state.pos = V2(9, 9);
 }
 
 void reloadFiles(EditorState *state) {
@@ -311,7 +296,7 @@ void DrawPath(ui_field_topdown *field, EditorState *state, AutoPath *path) {
 
    //TODO: make this better, make a "coloured line" call
    {
-      u32 point_count = (u32) (path->length * 4);
+      u32 point_count = (u32) (path->length * 4 * 4 /*added this second "* 4" because CIRC stuff is in meters not ft*/);
       f32 step = path->length / (f32)(point_count - 1);
 
       for(u32 i = 1; i < point_count; i++) {
@@ -397,14 +382,12 @@ void DrawUI(element *root, EditorState *state) {
    state->top_bar = RowPanel(root, Size(Size(root).x, page_tab_height));
    Background(state->top_bar, dark_grey);
    PageButton("Home", EditorPage_Home, state);
-   //PageButton("Sim", EditorPage_Simulator, state);
    PageButton("Robots", EditorPage_Robots, state);
    PageButton("Settings", EditorPage_Settings, state);
 
    element *page = ColumnPanel(root, RectMinMax(root->bounds.min + V2(0, status_bar_height + page_tab_height), root->bounds.max));
    switch(state->page) {
       case EditorPage_Home: DrawHome(page, state); break;
-      //case EditorPage_Simulator: DrawSimulator(page, state); break;
       case EditorPage_Robots: DrawProfiles(page, &state->profiles, state->ncrp_files); break;
       case EditorPage_Settings: {
          v2 robot_size_ft = V2(2, 2);

@@ -289,7 +289,7 @@ struct AutonomousProgram_Node {
    v2 pos;
    u8 command_count;
    u8 path_count;
-   //AutonomousProgram_Command [command_count]
+   //AutonomousProgram_CommandHeader [command_count]
    //AutonomousProgram_Path [path_count]
 };
 

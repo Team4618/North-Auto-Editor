@@ -22,7 +22,7 @@ ui_textbox _TextBox(ui_id id, element *parent, TextBoxData *data, f32 line_heigh
    UIContext *context = parent->context;
    element *e = _Panel(id, parent, Size(/*GetMaxCharWidth(font, line_height)*/ 15 * data->size, line_height).Captures(INTERACTION_SELECT));
 
-   string drawn_text = { data->text, data->used };
+   string drawn_text = String(data->text, data->used);
    Background(e, V4(0.7, 0.7, 0.7, 1));
    Text(e, drawn_text, e->bounds.min, line_height, BLACK);
 

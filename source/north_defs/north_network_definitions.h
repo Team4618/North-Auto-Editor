@@ -181,74 +181,88 @@ struct SetState_PacketHeader {
 
 //-------------------------------------
 #if 0
-struct UploadAutonomous_DataPoint {
-   f32 distance;
-   f32 value;
-};
-
-struct UploadAutonomous_ContinuousEvent {
-   u8 subsystem_name_length;
+//NOTE: From north_file_definitions.h -------------------------
+struct AutonomousProgram_ContinuousEvent {
    u8 command_name_length;
    u8 datapoint_count;
-   //char [subsystem_name_length]
    //char [command_name_length]
-   //UploadAutonomous_DataPoint [datapoint_count]
+   //North_PathDataPoint [datapoint_count]
 };
 
-struct UploadAutonomous_DiscreteEvent {
+struct AutonomousProgram_DiscreteEvent {
    f32 distance;
-   u8 subsystem_name_length;
    u8 command_name_length;
    u8 parameter_count;
-   //char [subsystem_name_length]
    //char [command_name_length]
    //f32 [parameter_count]
 };
 
-//TODO: change over to cubic hermite splines
-//TODO: events during the initial turn?
-struct UploadAutonomous_Path {
-   u8 is_reverse;
-   f32 accel;
-   f32 deccel;
-   f32 max_vel;
+struct AutonomousProgram_Path {
+   //NOTE: begin & end points are (parent.pos, in_tangent) & (end_node.pos, out_tangent)
+   v2 in_tangent;
+   v2 out_tangent;
 
-   //NOTE: begin & end points are parent.pos & end_node.pos
+   u8 is_reverse;
+
    u8 conditional_length; //NOTE: if conditional_length is 0, there is no conditional
    u8 control_point_count;
 
+   u8 velocity_datapoint_count;
    u8 continuous_event_count;
    u8 discrete_event_count;
 
    //char conditional_name [conditional_length]
-   //v2 [control_point_count]
-   //UploadAutonomous_ContinuousEvent [continuous_event_count]
-   //UploadAutonomous_DiscreteEvent [discrete_event_count]
+   //North_HermiteControlPoint [control_point_count]
 
-   //UploadAutonomous_Node end_node
+   //North_PathDataPoint [velocity_datapoint_count]
+   //AutonomousProgram_ContinuousEvent [continuous_event_count]
+   //AutonomousProgram_DiscreteEvent [discrete_event_count]
+
+   //AutonomousProgram_Node end_node
 };
 
-struct UploadAutonomous_Command {
-   u8 subsystem_name_length;
+struct AutonomousProgram_CommandHeader {
+   u8 type; //NOTE: North_CommandType
+   //AutonomousProgram_CommandBody_[type]
+};
+
+struct AutonomousProgram_CommandBody_Generic {
    u8 command_name_length;
    u8 parameter_count;
-   //char [subsystem_name_length]
+   
    //char [command_name_length]
    //f32 [parameter_count]
 };
 
-struct UploadAutonomous_Node {
+struct AutonomousProgram_CommandBody_Wait {
+   f32 duration;
+};
+
+struct AutonomousProgram_CommandBody_Pivot {
+   f32 start_angle;
+   f32 end_angle;
+   u8 turns_clockwise;
+   u8 velocity_datapoint_count;
+   u8 continuous_event_count;
+   u8 discrete_event_count;
+
+   //North_PathDataPoint [velocity_datapoint_count]
+   //AutonomousProgram_ContinuousEvent [continuous_event_count]
+   //AutonomousProgram_DiscreteEvent [discrete_event_count]
+};
+
+struct AutonomousProgram_Node {
    v2 pos;
    u8 command_count;
    u8 path_count;
-   //UploadAutonomous_Command [command_count]
-   //UploadAutonomous_Path [path_count]
-};
-
-struct UploadAutonomous_PacketHeader {
-   
-   //UploadAutonomous_Node begining_node
+   //AutonomousProgram_CommandHeader [command_count]
+   //AutonomousProgram_Path [path_count]
 };
 #endif
+
+struct UploadAutonomous_PacketHeader {
+   f32 starting_angle;
+   //AutonomousProgram_Node begining_node
+};
 
 #pragma pack(pop)

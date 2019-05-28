@@ -198,7 +198,9 @@ void RecieveWelcomePacket(RobotProfile *profile, buffer packet) {
    
    Reset(arena);
    profile->state = RobotProfileState::Connected;
-   
+   profile->first_group = NULL;
+   profile->group_count = 0;
+
    Welcome_PacketHeader *header = ConsumeStruct(&packet, Welcome_PacketHeader);
    profile->name = PushCopy(arena, ConsumeString(&packet, header->robot_name_length));
    profile->size = V2(header->robot_width, header->robot_length);
@@ -394,20 +396,19 @@ buffer MakeParamOpPacket(RobotProfileParameter *param, ParameterOp_Type::type ty
    return packet;
 }
 
-//TODO: readd this when we fix the networking
 void SendParamSetValue(RobotProfileParameter *param, f32 value, u32 index = 0) {
    buffer packet = MakeParamOpPacket(param, ParameterOp_Type::SetValue, value, index);
-   // SendPacket(packet);
+   SendPacket(packet);
 }
 
 void SendParamRemoveValue(RobotProfileParameter *param, u32 index) {
    buffer packet = MakeParamOpPacket(param, ParameterOp_Type::RemoveValue, 0, index);
-   // SendPacket(packet);
+   SendPacket(packet);
 }
 
 void SendParamAddValue(RobotProfileParameter *param, f32 value) {
    buffer packet = MakeParamOpPacket(param, ParameterOp_Type::AddValue, value, 0);
-   // SendPacket(packet);
+   SendPacket(packet);
 }
 
 //UI--------------------------------------------------

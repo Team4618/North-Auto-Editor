@@ -22,7 +22,14 @@
 
 #include "lib/ui_impl_win32_opengl.cpp"
 
+#include "north_defs/north_common_definitions.h"
+#include "north_defs/north_file_definitions.h"
+#include "north_defs/north_network_definitions.h"
+
+#include "north_shared/north_networking_win32.cpp"
+
 #include "auto_editor.cpp"
+#include "network.cpp"
 
 int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
    Win32CommonInit(PlatformAllocArena(Megabyte(10), "Temp"));
@@ -48,12 +55,26 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int n
    EditorState state = {};
    initEditor(&state);
 
+   WSADATA winsock_data = {};
+   WSAStartup(MAKEWORD(2, 2), &winsock_data);
+   CreateSocket();
+
    Timer timer = InitTimer();
    while(PumpMessages(&window, &ui_context)) {
-      Reset(__temp_arena);
-      
       state.directory_changed = CheckFiles(&state.file_watcher);
 
+      Reset(__temp_arena);
+      PacketHeader header = {};
+      buffer packet = {};
+      while(HasPackets(ui_context.curr_time, &header, &packet)) {
+         HandlePacket(&state, (PacketType::type) header.type, packet);
+      }
+
+      if(HandleConnectionStatus((state.settings.team_number == 0) ? "127.0.0.1" : "10.0.5.4", ui_context.curr_time)) {
+         HandleDisconnect(&state);
+      }
+
+      Reset(__temp_arena);
       element *root_element = beginFrame(window.size, &ui_context, GetDT(&timer));
       DrawUI(root_element, &state);
       endFrame(&window, root_element);

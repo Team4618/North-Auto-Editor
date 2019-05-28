@@ -103,6 +103,6 @@ ui_button _Button(ui_id id, element *parent, string text, button_style style) {
    return result;
 }
 
-ui_button _Button(ui_id id, element *parent, char *s, button_style style) {
-   return _Button(id, parent, Literal(s), style);
-}
+// ui_button _Button(ui_id id, element *parent, char *s, button_style style) {
+//    return _Button(id, parent, Literal(s), style);
+// }

@@ -59,3 +59,15 @@ void CubicHermiteSpline(ui_field_topdown *field,
 
    _Line(field->e, colour, thickness, points, point_count);
 }
+
+void DrawRobot(ui_field_topdown *field, v2 size, 
+               v2 pos, f32 angle, v4 colour)
+{
+   v2 heading = DirectionNormal(ToDegrees(angle));
+   v2 a = pos + heading * 0.5*size.x + Perp(heading) * 0.5*size.y;
+   v2 b = pos + heading * 0.5*size.x - Perp(heading) * 0.5*size.y;
+   v2 c = pos - heading * 0.5*size.x - Perp(heading) * 0.5*size.y;
+   v2 d = pos - heading * 0.5*size.x + Perp(heading) * 0.5*size.y;
+   Loop(field->e, colour, 3, GetPoint(field, a), GetPoint(field, b), GetPoint(field, c), GetPoint(field, d));
+   Line(field->e, colour, 3, GetPoint(field, pos), GetPoint(field, pos + heading*0.5*size.y));
+}

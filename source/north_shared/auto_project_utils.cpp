@@ -768,4 +768,37 @@ void WriteProject(AutoProjectLink *project) {
 }
 //FILE-WRITING----------------------------------------------
 
-//TODO: AutoProjectLink to packet
+//NETWORKING------------------------------------------------
+buffer MakeSetStatePacket(v2 pos, f32 angle) {
+   buffer packet = PushTempBuffer(Kilobyte(5));
+
+   PacketHeader p_header = { sizeof(SetState_PacketHeader), (u8)PacketType::SetState };
+   WriteStruct(&packet, &p_header);
+   
+   SetState_PacketHeader header = {};
+   header.pos = pos;
+   header.angle = angle;
+   WriteStruct(&packet, &header);
+   
+   return packet;
+}
+
+buffer MakeUploadAutonomousPacket(AutoProjectLink *project) {
+   //TODO: this uses 10MB, make it more efficient
+   buffer data = PushTempBuffer(Megabyte(5));
+   WriteAutoNode(&data, project->starting_node);
+
+   //Write packet
+   buffer packet = PushTempBuffer(Megabyte(5));   
+   u32 size = sizeof(UploadAutonomous_PacketHeader) + data.offset;
+   PacketHeader p_header = { size, (u8)PacketType::UploadAutonomous };
+   WriteStruct(&packet, &p_header);
+   
+   UploadAutonomous_PacketHeader header = {};
+   header.starting_angle = project->starting_angle;
+   WriteStruct(&packet, &header);
+
+   WriteSize(&packet, data.data, data.offset);
+   return packet;
+}
+//NETWORKING------------------------------------------------
